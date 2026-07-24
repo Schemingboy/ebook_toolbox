@@ -248,11 +248,13 @@ async def run_script_websocket(websocket: WebSocket, script_id: str):
     temp_script = Path(__file__).parent / f"temp_run_{script_id}.py"
 
     # 通用前导代码
+    # line_buffering=True：子进程 stdout 是管道（非终端），默认块缓冲会让 print
+    # 攒在缓冲区里，父进程 readline() 收不到换行 → GUI 卡在"正在启动"。按行刷新解决。
     preamble = (
         "import sys\n"
         "import io\n"
-        "sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')\n"
-        "sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')\n"
+        "sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)\n"
+        "sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)\n"
     )
 
     if script_id == "collect_local_ebooks":
@@ -357,7 +359,7 @@ async def run_script_websocket(websocket: WebSocket, script_id: str):
         f.write(script_code)
 
     process = await asyncio.create_subprocess_exec(
-        PYTHON_EXECUTABLE, str(temp_script),
+        PYTHON_EXECUTABLE, "-u", str(temp_script),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         cwd=str(Path(__file__).parent)

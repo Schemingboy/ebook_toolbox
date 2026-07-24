@@ -419,8 +419,51 @@ class Zlibrary:
 
     # ── 用户信息 ────────────────────────────────────────────
 
+    def _fetch_profile_via_eapi(self) -> Optional[dict]:
+        """通过 /eapi/user/profile 获取用户信息（JSON，含真实下载配额）。
+
+        实测该接口返回 {"success": 1, "user": {..., "downloads_today": int,
+        "downloads_limit": int, ...}}。成功返回 profile dict，任何异常/非预期
+        响应返回 None，由调用方回退到 HTML 抓取。
+        """
+        try:
+            resp = self._get("/eapi/user/profile")
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            if not data.get("success") or "user" not in data:
+                return None
+            src = data["user"]
+            user = {
+                "id": str(src.get("id", "")),
+                "name": src.get("name", ""),
+                "email": src.get("email", ""),
+                "remix_userid": "",
+                "remix_userkey": src.get("remix_userkey", ""),
+                "downloads_limit": int(src.get("downloads_limit", 10)),
+                "downloads_today": int(src.get("downloads_today", 0)),
+                "kindle_email": src.get("kindle_email", ""),
+            }
+            # 从 cookie 补全 remix token
+            for cookie in self._session.cookies:
+                if cookie.name == "remix_userid":
+                    user["remix_userid"] = cookie.value
+                    if not user["id"]:
+                        user["id"] = cookie.value
+            return {"success": True, "user": user}
+        except (json.JSONDecodeError, ValueError, ZLibraryError, requests.RequestException):
+            return None
+
     def _fetch_profile(self) -> dict:
-        """从网页抓取用户信息。"""
+        """获取用户信息。
+
+        优先调用 /eapi/user/profile（JSON 接口，含真实的 downloads_today /
+        downloads_limit），失败再回退到 HTML 抓取。
+        """
+        eapi_result = self._fetch_profile_via_eapi()
+        if eapi_result is not None:
+            return eapi_result
+
         try:
             resp = self._get("/")
 
@@ -471,9 +514,13 @@ class Zlibrary:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def getProfile(self) -> dict:
-        """获取用户信息。"""
-        if self._userinfo:
+    def getProfile(self, force_refresh: bool = False) -> dict:
+        """获取用户信息。
+
+        force_refresh=True 时跳过缓存重新抓取（下载配额会随下载递减，
+        查询剩余次数必须实时刷新，不能用首次登录的缓存快照）。
+        """
+        if self._userinfo and not force_refresh:
             return {"success": True, "user": self._userinfo}
         profile = self._fetch_profile()
         if profile.get("success"):
@@ -481,9 +528,9 @@ class Zlibrary:
         return profile
 
     def getDownloadsLeft(self) -> int:
-        """获取今日剩余下载次数。"""
+        """获取今日剩余下载次数（实时刷新，不用缓存）。"""
         try:
-            profile = self.getProfile()
+            profile = self.getProfile(force_refresh=True)
             if profile.get("success"):
                 user = profile["user"]
                 limit = user.get("downloads_limit", 10)
@@ -877,7 +924,7 @@ class Zlibrary:
         cd = response.headers.get("Content-Disposition", "")
         fname_match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)', cd)
         if fname_match:
-            return requests.utils.unquote(fname_match.group(1))
+            return self._fix_header_mojibake(requests.utils.unquote(fname_match.group(1)))
 
         # 从 Content-Type 扩展名
         ext = book.get("extension", "")
@@ -885,6 +932,20 @@ class Zlibrary:
         if ext and not ext.startswith("."):
             ext = f".{ext}"
         return f"{title}{ext}".replace(" ", "_")
+
+    @staticmethod
+    def _fix_header_mojibake(name: str) -> str:
+        """还原被 latin-1 误解码的 UTF-8 文件名。
+
+        requests 按 HTTP 老规范用 latin-1 解析响应头，服务器发的 UTF-8
+        文件名会变成 mojibake（如 "球状闪电" → "çç¶éªçµ"）。这里尝试
+        latin-1→utf-8 还原：能还原说明确是被误解码的 UTF-8，用还原值；
+        本来就是正常字符串则会抛异常，保持原样。
+        """
+        try:
+            return name.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return name
 
     # ── 辅助 ────────────────────────────────────────────────
 
