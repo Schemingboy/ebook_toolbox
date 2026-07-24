@@ -18,18 +18,22 @@
 | `pull_md_images_to_local.py` | 下载 Markdown 中的远程图片并改写为本地路径 |
 | `doc2md.py` | 合并目录中的 `.doc/.docx` 为单个 Markdown 文件 |
 | `rename_epub_with_catalog.py` | 为 EPUB 合集文件名补充目录信息 |
+| `web_server.py` | Web UI 启动入口（uvicorn + FastAPI） |
+| `web_api.py` | FastAPI 路由：设置读写、脚本列表、WebSocket 执行流、凭据测试 |
+| `refresh_zlibrary_cookies.py` | Playwright 浏览器导出 Cloudflare cookies（绕过验证） |
 
 ## 共享模块
 
 | 文件 | 作用 |
 | --- | --- |
-| `env_config.py` | 读取项目根目录 `.env` 中的 Z-Library 配置 |
+| `env_config.py` | 读取项目根目录 `.env` 中的 Z-Library 配置（含 `domain`/`proxy`/`fallback_domains`） |
 | `library_index.py` | 统一 SQLite 文件索引、书名标准化、内容 quick/full hash 计算与查询 |
 | `zlibrary_runtime.py` | 统一 Z-Library 认证加载、客户端创建、待处理结果文件发现 |
 | `zlibrary_booklist_workflow.py` | 书单 HTML 解析、标准化本地索引命中判断、下载目标路径拼装 |
 | `local_ebooks_workflow.py` | 本地书单输出目录决策、已复制条目解析、批量跳过分类 |
 | `duplicate_finder_workflow.py` | 重复文件保留规则、Markdown 报告渲染与解析 |
-| `Zlibrary.py` | 项目内使用的 Z-Library API 封装 |
+| `Zlibrary.py` | **重写于 2026-07-24**：废弃旧 JSON API，改用 HTML 页面抓取，支持多域名自动探测、表单/CSRF 登录、SOCKS5 代理 |
+| `zlibrary_adapter.py` | 基于 `zlibrary` PyPI 包的同步适配器，支持代理链和 Tor/Onion 路由 |
 
 ## 测试
 
@@ -41,6 +45,7 @@
 | `tests/test_zlibrary_runtime.py` | 共享认证加载、客户端创建、待处理结果文件筛选 |
 | `tests/test_duplicate_finder_workflow.py` | 重复文件选择策略、报告渲染与改名同内容文件识别 |
 | `tests/test_small_tool_entrypoints.py` | 小工具 CLI 入口参数与默认路径解析 |
+| `tests/test_web_api.py` | Web API 路径校验 |
 
 ## 非核心目录
 

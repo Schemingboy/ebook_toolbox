@@ -164,3 +164,14 @@ cython_debug/
 # temp
 temp/
 output/
+library/
+
+# 敏感凭据（真实账号 cookies，切勿提交）
+zlibrary_cookies.json
+
+# 运行产物
+_file_index.sqlite3
+*.sqlite3
+单本好书/
+tests/test_download.epub
+temp_run_*.py

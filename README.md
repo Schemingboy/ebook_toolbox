@@ -7,7 +7,8 @@
 1. 安装依赖：
 
    ```bash
-   pip install requests pyperclip selenium lxml docx2txt ebooklib send2trash pywin32
+   pip install requests beautifulsoup4 lxml pyperclip selenium docx2txt ebooklib send2trash pywin32 fastapi uvicorn playwright cloudscraper
+   playwright install chromium
    ```
 
 2. 复制项目根目录下的 `.env.example` 为 `.env`，填写 Z-Library 账号信息：
@@ -16,10 +17,39 @@
    ZLIBRARY_EMAIL=your_email@example.com
    ZLIBRARY_PASSWORD=your_password
 
-   # 或者直接使用 remix token
+   # 或者直接使用 remix token（最推荐方式，不怕密码泄露）
    ZLIBRARY_REMIX_USERID=
    ZLIBRARY_REMIX_USERKEY=
+
+   # 自定义域名（留空则自动探测可用域名）
+   ZLIBRARY_DOMAIN=
+
+   # 代理配置（国内用户必备，否则无法从官方域名下载）
+   ZLIBRARY_PROXY=
    ```
+
+   > **国内用户特别注意**：
+   > - ⚠️ `z-lib.id` 已被确认为**钓鱼站**，不要使用。当前官方域名为 `z-lib.by`
+   > - 所有官方域名都有 **Cloudflare 浏览器验证**，自动化工具无法直接访问
+   > - 首次使用或遇到 Cloudflare 报错时，运行：`.venv\Scripts\python refresh_zlibrary_cookies.py`
+   > - 该脚本会用 Playwright 真实浏览器导出 cookies，绕过 Cloudflare
+   > - Web UI 设置面板中有「测试连接」按钮，可一键验证配置
+
+3. **获取 Remix Token**：
+
+   Remix token 是 Z-Library 的会话凭证。运行以下命令自动获取并写入 `.env`：
+
+   ```bash
+   .venv\Scripts\python refresh_zlibrary_cookies.py
+   ```
+
+   这会：
+   - 启动 Playwright 浏览器（静默模式）
+   - 用 `.env` 中的邮箱密码或已有 token 自动登录
+   - 导出 Cloudflare cookies 到 `zlibrary_cookies.json`
+   - 确保 `ZLIBRARY_REMIX_USERID` 和 `ZLIBRARY_REMIX_USERKEY` 已填入 `.env`
+
+   Token 过期或遇到 Cloudflare 报错时，重新运行上述命令即可。
 
 3. **全新特性：Web 可视化控制台（推荐）**
 
