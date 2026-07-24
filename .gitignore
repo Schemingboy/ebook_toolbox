@@ -175,3 +175,6 @@ _file_index.sqlite3
 单本好书/
 tests/test_download.epub
 temp_run_*.py
+
+# AI agent 私有指令，不进公开仓库
+CLAUDE.md

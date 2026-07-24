@@ -32,7 +32,7 @@
 | `zlibrary_booklist_workflow.py` | 书单 HTML 解析、标准化本地索引命中判断、下载目标路径拼装 |
 | `local_ebooks_workflow.py` | 本地书单输出目录决策、已复制条目解析、批量跳过分类 |
 | `duplicate_finder_workflow.py` | 重复文件保留规则、Markdown 报告渲染与解析 |
-| `Zlibrary.py` | **重写于 2026-07-24**：废弃旧 JSON API，改用 HTML 页面抓取，支持多域名自动探测、表单/CSRF 登录、SOCKS5 代理 |
+| `Zlibrary.py` | 同步客户端：以 HTML 页面抓取为主，多域名自动探测、RPC/表单登录、SOCKS5 代理；用户资料与下载配额走 `/eapi/user/profile` JSON 接口（`downloads_today`/`downloads_limit`），配额每次实时刷新不缓存 |
 | `zlibrary_adapter.py` | 基于 `zlibrary` PyPI 包的同步适配器，支持代理链和 Tor/Onion 路由 |
 
 ## 测试
