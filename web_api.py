@@ -11,6 +11,13 @@ from pydantic import BaseModel
 from env_config import load_zlibrary_env, ENV_FILE
 
 app = FastAPI()
+PROJECT_DIR = Path(__file__).parent
+COOKIES_FILE = str(PROJECT_DIR / "zlibrary_cookies.json")
+DEFAULT_LIBRARY_DIR = PROJECT_DIR / "library"
+DEFAULT_OUTPUT_DIR = PROJECT_DIR / "output"
+
+DEFAULT_LIBRARY_DIR.mkdir(exist_ok=True)
+DEFAULT_OUTPUT_DIR.mkdir(exist_ok=True)
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,10 +30,12 @@ app.add_middleware(
 frontend_dist = Path(__file__).parent / "frontend" / "dist"
 
 class EnvConfigModel(BaseModel):
-    zlibrary_email: str
-    zlibrary_password: str
-    zlibrary_remix_userid: str
-    zlibrary_remix_userkey: str
+    zlibrary_email: str = ""
+    zlibrary_password: str = ""
+    zlibrary_remix_userid: str = ""
+    zlibrary_remix_userkey: str = ""
+    zlibrary_domain: str = ""
+    zlibrary_proxy: str = ""
 
 @app.get("/api/settings")
 def get_settings():
@@ -39,8 +48,11 @@ def save_settings(config: EnvConfigModel):
     if ENV_FILE.exists():
         with ENV_FILE.open("r", encoding="utf-8") as f:
             lines = f.readlines()
-    
-    def update_or_append(lines_arr, key, val):
+
+    def update_or_append(lines_arr, key, val, keep_if_empty=False):
+        """写入环境变量。keep_if_empty=True 时，如果 val 为空则不覆盖已有值。"""
+        if keep_if_empty and not val:
+            return
         found = False
         for i, line in enumerate(lines_arr):
             if line.strip().startswith(f"{key}="):
@@ -49,45 +61,128 @@ def save_settings(config: EnvConfigModel):
                 break
         if not found:
             lines_arr.append(f"{key}={val}\n")
-    
+
     update_or_append(lines, "ZLIBRARY_EMAIL", config.zlibrary_email)
     update_or_append(lines, "ZLIBRARY_PASSWORD", config.zlibrary_password)
     update_or_append(lines, "ZLIBRARY_REMIX_USERID", config.zlibrary_remix_userid)
     update_or_append(lines, "ZLIBRARY_REMIX_USERKEY", config.zlibrary_remix_userkey)
+    # 域名和代理：用户没填时不覆盖已有的值
+    update_or_append(lines, "ZLIBRARY_DOMAIN", config.zlibrary_domain, keep_if_empty=True)
+    update_or_append(lines, "ZLIBRARY_PROXY", config.zlibrary_proxy, keep_if_empty=True)
 
     with ENV_FILE.open("w", encoding="utf-8") as f:
         f.writelines(lines)
-    
+
     return {"status": "ok"}
+
+class AuthTestResponse(BaseModel):
+    success: bool
+    message: str
+    user_info: dict | None = None
+
+@app.post("/api/settings/test-auth", response_model=AuthTestResponse)
+def test_auth(config: EnvConfigModel):
+    """测试 Z-Library 账号连接。"""
+    try:
+        from Zlibrary import Zlibrary, ZLibraryError, LoginError
+
+        # 优先使用前端传入的值，如果为空则从 .env 读取
+        env_config = load_zlibrary_env()
+        domain = config.zlibrary_domain.strip() or env_config.get("domain", "z-lib.by")
+        proxy = config.zlibrary_proxy.strip() or env_config.get("proxy", "")
+
+        # 优先尝试 token 登录（前端传入 > .env）
+        remix_uid = config.zlibrary_remix_userid or env_config.get("remix_userid", "")
+        remix_key = config.zlibrary_remix_userkey or env_config.get("remix_userkey", "")
+        email = config.zlibrary_email or env_config.get("email", "")
+        password = config.zlibrary_password or env_config.get("password", "")
+
+        if remix_uid and remix_key:
+            client = Zlibrary(
+                remix_userid=remix_uid,
+                remix_userkey=remix_key,
+                domain=domain,
+                proxy=proxy,
+                cookies_file=COOKIES_FILE,
+            )
+        elif email and password:
+            client = Zlibrary(
+                email=email,
+                password=password,
+                domain=domain,
+                proxy=proxy,
+                cookies_file=COOKIES_FILE,
+            )
+        else:
+            return AuthTestResponse(
+                success=False,
+                message="请至少填写 邮箱+密码 或 Remix Token",
+            )
+
+        profile = client.getProfile()
+        if profile.get("success"):
+            user = profile["user"]
+            remaining = client.getDownloadsLeft()
+            return AuthTestResponse(
+                success=True,
+                message=f"连接成功！用户: {user.get('name', '未知')}，今日剩余配额: {remaining} 本",
+                user_info={
+                    "name": user.get("name"),
+                    "email": user.get("email"),
+                    "remix_userid": user.get("remix_userid"),
+                    "downloads_left": remaining,
+                },
+            )
+        else:
+            return AuthTestResponse(
+                success=False,
+                message=f"登录失败: {profile.get('error', '凭据无效')}",
+            )
+
+    except LoginError as e:
+        return AuthTestResponse(success=False, message=f"登录失败: {e}")
+    except ZLibraryError as e:
+        return AuthTestResponse(success=False, message=f"连接失败: {e}")
+    except Exception as e:
+        return AuthTestResponse(success=False, message=f"未知错误: {e}")
 
 @app.get("/api/scripts")
 def get_scripts():
     return [
         {
             "id": "collect_local_ebooks",
-            "name": "本地电子书搜索与整理",
-            "description": "在指定硬盘中搜索书单中的电子书，并统一归档整理。",
+            "name": "按书名整理本地电子书",
+            "description": "粘贴《书名》后搜索本地书库：已有文件复制到 output，未找到的书写入处理结果。",
             "params": [
-                {"key": "list_dir", "label": "书单文件目录", "default": "", "tooltip": "包含书单TXT或MD的目录路径。脚本会自动读取该目录下的所有文本并提取其中带有《》的书名。必填。"},
-                {"key": "clipboard_content", "label": "从剪贴板读取书单", "type": "checkbox", "default": "false", "tooltip": "勾选后从浏览器剪贴板读取书单内容（含《》标记的书名），不再需要指定书单文件目录。"},
-                {"key": "search_dir", "label": "本地搜索盘符/目录", "default": "J:\\", "tooltip": "脚本将在此目录及其子孙目录中搜索找到的书名的电子书。耗时受目录总文件数影响。"},
+                {"key": "list_dir", "label": "书单文件目录（可选）", "default": "", "tooltip": "关闭剪贴板模式后使用：填写包含TXT或MD书单的目录。"},
+                {"key": "clipboard_content", "label": "粘贴《书名》运行", "type": "checkbox", "default": "true", "tooltip": "默认开启。读取含《》书名的剪贴板文本，不需要准备书单文件。"},
+                {"key": "search_dir", "label": "本地电子书库", "default": str(DEFAULT_LIBRARY_DIR), "tooltip": "把已有的 EPUB、PDF、TXT、MOBI 或 AZW3 文件放在这里；程序只搜索，不下载。"},
                 {"key": "skip_index_update", "label": "不更新索引", "type": "checkbox", "default": "false", "tooltip": "勾选后跳过文件索引的刷新检查，直接使用已有索引。适用于索引已是最新的情况，可节省等待时间。"},
-                {"key": "output_dir", "label": "收集输出目录", "default": "J:\\书单", "tooltip": "找到的电子书统一存放位置，会自动为每个书单建子文件夹。"},
+                {"key": "output_dir", "label": "整理结果目录", "default": str(DEFAULT_OUTPUT_DIR), "tooltip": "找到的电子书和处理结果统一保存在这里。"},
             ]
         },
         {
             "id": "collect_ebooks_with_booklists",
-            "name": "书单批量下载 (含Z-Lib)",
-            "description": "先在本地搜索匹配书单电子书，缺失的部分尝试通过Z-Library网络接口补充下载。",
+            "name": "批量书单目录处理（高级）",
+            "description": "读取本地 TXT/MD 书单目录并运行现有批处理；单本书名请使用上方入口。",
             "params": [
                 {"key": "list_dir", "label": "书单文件目录", "default": "", "tooltip": "包含待搜集书单文件的目录，必须确保内容已被《》包围。必填。"},
-                {"key": "clipboard_content", "label": "从剪贴板读取书单", "type": "checkbox", "default": "false", "tooltip": "勾选后从浏览器剪贴板读取书单内容（含《》标记的书名），不再需要指定书单文件目录。"},
-                {"key": "search_dir", "label": "本地搜索基目录", "default": "J:\\", "tooltip": "本地搜索的扫描起点目录。"},
+                {"key": "search_dir", "label": "本地搜索基目录", "default": str(DEFAULT_LIBRARY_DIR), "tooltip": "本地搜索的扫描起点目录。"},
                 {"key": "skip_index_update", "label": "不更新索引", "type": "checkbox", "default": "false", "tooltip": "勾选后跳过文件索引的刷新检查，直接使用已有索引。适用于索引已是最新的情况，可节省等待时间。"},
-                {"key": "output_dir", "label": "输出目录", "default": "J:\\2024年豆瓣读书榜单", "tooltip": "最终电子书的保存和合并输出位置。"},
+                {"key": "output_dir", "label": "输出目录", "default": str(DEFAULT_OUTPUT_DIR), "tooltip": "最终电子书的保存和合并输出位置。"},
             ]
         }
     ]
+
+
+def validate_workflow_path(value: str, label: str, must_exist: bool = False) -> Path:
+    path = Path(value.strip())
+    if not path.is_absolute():
+        raise ValueError(f"{label}必须是完整路径，例如：{DEFAULT_OUTPUT_DIR}")
+    if must_exist and not path.exists():
+        raise ValueError(f"{label}不存在：{path}")
+    return path
+
 
 @app.websocket("/api/ws/run/{script_id}")
 async def run_script_websocket(websocket: WebSocket, script_id: str):
@@ -96,22 +191,39 @@ async def run_script_websocket(websocket: WebSocket, script_id: str):
     data = await websocket.receive_json()
     params = data.get("params", {})
 
-    list_dir = params.get("list_dir", "").replace("\\", "\\\\")
-    search_dir = params.get("search_dir", "J:\\").replace("\\", "\\\\")
-    output_dir = params.get("output_dir", "J:\\书单").replace("\\", "\\\\")
-
     skip_index_update = params.get("skip_index_update", "false") == "true"
     use_clipboard = params.get("clipboard_content", "false") == "true"
     clipboard_text = params.get("clipboard_text", "") if use_clipboard else ""
 
     # 验证：剪贴板模式下不要求 list_dir
-    if not use_clipboard and not list_dir:
+    raw_list_dir = params.get("list_dir", "")
+    if not use_clipboard and not raw_list_dir:
         await websocket.send_text("错误：请填写书单文件目录(list_dir)或勾选'从剪贴板读取书单'！\n")
         await websocket.close()
         return
 
     if use_clipboard and not clipboard_text:
         await websocket.send_text("错误：已勾选'从剪贴板读取书单'，但未收到剪贴板内容！请先点击'读取剪贴板'或手动粘贴书单文本。\n")
+        await websocket.close()
+        return
+
+    try:
+        search_dir = repr(str(validate_workflow_path(
+            params.get("search_dir", str(DEFAULT_LIBRARY_DIR)),
+            "本地电子书库",
+            must_exist=True,
+        )))
+        output_dir = repr(str(validate_workflow_path(
+            params.get("output_dir", str(DEFAULT_OUTPUT_DIR)),
+            "输出目录",
+        )))
+        list_dir = repr(str(validate_workflow_path(
+            raw_list_dir,
+            "书单文件目录",
+            must_exist=True,
+        ))) if not use_clipboard else repr("")
+    except ValueError as error:
+        await websocket.send_text(f"错误：{error}\n")
         await websocket.close()
         return
 
@@ -135,8 +247,8 @@ async def run_script_websocket(websocket: WebSocket, script_id: str):
                     extract_book_names, clean_dirname, process_book_list,
                 )
 
-                search_dir = r"{search_dir}"
-                output_dir = Path(r"{output_dir}")
+                search_dir = {search_dir}
+                output_dir = Path({output_dir})
 
                 clipboard_text = {clipboard_repr}
 
@@ -169,9 +281,9 @@ async def run_script_websocket(websocket: WebSocket, script_id: str):
                 from pathlib import Path
                 from collect_local_ebooks import process_book_list_directory, check_file_list_update, generate_file_list
 
-                list_dir = r"{list_dir}"
-                search_dir = r"{search_dir}"
-                output_dir = Path(r"{output_dir}")
+                list_dir = {list_dir}
+                search_dir = {search_dir}
+                output_dir = Path({output_dir})
 
                 print("开始执行: 本地电子书搜集...")
                 try:
@@ -191,8 +303,8 @@ async def run_script_websocket(websocket: WebSocket, script_id: str):
             script_code = preamble + dedent(f"""\
                 from collect_ebooks_with_booklists import process_ebooks
 
-                search_dir = r"{search_dir}"
-                output_dir = r"{output_dir}"
+                search_dir = {search_dir}
+                output_dir = {output_dir}
                 clipboard_text = {clipboard_repr}
 
                 print("开始执行: 批量查缺补漏与下载流程（剪贴板模式）...")
@@ -207,9 +319,9 @@ async def run_script_websocket(websocket: WebSocket, script_id: str):
             script_code = preamble + dedent(f"""\
                 from collect_ebooks_with_booklists import process_ebooks
 
-                list_dir = r"{list_dir}"
-                search_dir = r"{search_dir}"
-                output_dir = r"{output_dir}"
+                list_dir = {list_dir}
+                search_dir = {search_dir}
+                output_dir = {output_dir}
 
                 print("开始执行: 批量查缺补漏与下载流程...")
                 try:

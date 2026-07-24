@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 
 const API_BASE = 'http://127.0.0.1:8000';
 const WS_BASE = 'ws://127.0.0.1:8000';
+const STORAGE_PREFIX = 'ebook_toolbox_v2';
 
 interface ParamDef {
   key: string;
@@ -37,7 +38,7 @@ export default function ScriptRunner() {
         data.forEach(script => {
           initialParams[script.id] = {};
           script.params.forEach(p => {
-            const savedValue = localStorage.getItem(`param_${script.id}_${p.key}`);
+            const savedValue = localStorage.getItem(`${STORAGE_PREFIX}_${script.id}_${p.key}`);
             initialParams[script.id][p.key] = savedValue !== null ? savedValue : p.default;
           });
         });
@@ -53,7 +54,7 @@ export default function ScriptRunner() {
 
   const handleCheckboxChange = (scriptId: string, key: string, checked: boolean) => {
     const val = checked ? 'true' : 'false';
-    localStorage.setItem(`param_${scriptId}_${key}`, val);
+    localStorage.setItem(`${STORAGE_PREFIX}_${scriptId}_${key}`, val);
     setParamValues(prev => ({
       ...prev,
       [scriptId]: {
@@ -182,7 +183,7 @@ export default function ScriptRunner() {
                         disabled={isDisabled}
                         onChange={(e) => {
                           const val = e.target.value;
-                          localStorage.setItem(`param_${script.id}_${p.key}`, val);
+                          localStorage.setItem(`${STORAGE_PREFIX}_${script.id}_${p.key}`, val);
                           setParamValues(prev => ({
                             ...prev,
                             [script.id]: {
