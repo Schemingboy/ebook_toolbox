@@ -203,6 +203,25 @@ class LocalEbooksWorkflowTests(unittest.TestCase):
             result_content = (target_dir / "处理结果.txt").read_text(encoding="utf-8")
             self.assertIn("相同内容", result_content)
 
+    def test_process_book_list_writes_clean_pending_list_for_missing_books(self):
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            library_dir = temp_path / "library"
+            output_dir = temp_path / "output"
+            library_dir.mkdir()
+            output_dir.mkdir()
+
+            collect_local_ebooks.process_book_list(
+                list_file=output_dir / "书单",
+                search_dir=library_dir,
+                from_clipboard=True,
+                output_dir=output_dir,
+                clipboard_content="《三体》\n《沙丘》",
+            )
+
+            pending_file = output_dir / "书单" / "《三体》" / "待获取书单.txt"
+            self.assertEqual(pending_file.read_text(encoding="utf-8"), "《三体》\n《沙丘》\n")
+
 
 if __name__ == "__main__":
     unittest.main()

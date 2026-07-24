@@ -19,7 +19,10 @@ class ZlibraryRuntimeTests(unittest.TestCase):
                 captured_kwargs.update(kwargs)
 
             def getProfile(self):
-                return {"user": {"id": 42, "remix_userkey": "abc-token"}}
+                return {"success": True, "user": {"id": 42, "remix_userkey": "abc-token"}}
+
+            def isLoggedIn(self):
+                return True
 
         with tempfile.TemporaryDirectory() as temp_dir:
             env_path = Path(temp_dir) / ".env"
@@ -31,7 +34,7 @@ class ZlibraryRuntimeTests(unittest.TestCase):
 
             auth = load_zlibrary_auth(env_path=env_path, client_factory=FakeClient)
 
-        self.assertEqual(captured_kwargs, {"email": "test@example.com", "password": "secret123"})
+        self.assertEqual(captured_kwargs, {"email": "test@example.com", "password": "secret123", "domain": "", "proxy": ""})
         self.assertEqual(auth, ZLibraryAuth(remix_userid="42", remix_userkey="abc-token"))
 
     def test_load_zlibrary_auth_uses_existing_tokens_without_login(self):
@@ -67,7 +70,7 @@ class ZlibraryRuntimeTests(unittest.TestCase):
         )
 
         self.assertIsInstance(client, FakeClient)
-        self.assertEqual(captured_kwargs, {"remix_userid": "123", "remix_userkey": "token"})
+        self.assertEqual(captured_kwargs, {"remix_userid": "123", "remix_userkey": "token", "domain": "", "proxy": ""})
 
     def test_find_pending_result_files_filters_processed_entries(self):
         with tempfile.TemporaryDirectory() as temp_dir:
