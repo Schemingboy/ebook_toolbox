@@ -1,357 +1,907 @@
 """
-Copyright (c) 2023-2024 Bipinkrish
-This file is part of the Zlibrary-API by Bipinkrish
-Zlibrary-API / Zlibrary.py
+Z-Library 同步客户端
 
-For more information, see:
-https://github.com/bipinkrish/Zlibrary-API/
+通过 HTML 页面抓取与当前 Z-Library 站点交互，替代已失效的旧 JSON API。
+支持自定义域名、HTTP/SOCKS5 代理、Cookie 持久化、域名自动降级。
+
+用法:
+    # 邮箱密码登录
+    client = Zlibrary(email="xxx@mail.com", password="pass")
+    client.getProfile()
+    client.search("Python", extensions=["epub"])
+
+    # Token 登录（推荐）
+    client = Zlibrary(remix_userid="12345", remix_userkey="abc")
+    client.getDownloadsLeft()
+
+    # 自定义域名 + 代理
+    client = Zlibrary(remix_userid="12345", remix_userkey="abc",
+                      domain="z-lib.id", proxy="socks5://127.0.0.1:1080")
 """
 
+import re
+import json
+import time
+import logging
+from pathlib import Path
+from urllib.parse import urljoin, urlparse, quote
+from typing import Optional
+
 import requests
+from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_DOMAINS = [
+    "z-lib.by",
+    "z-library.gy",
+    "zh.zlib.li",
+    "zh.z-lib.rest",
+]
+
+LOGIN_ENDPOINTS = [
+    "/rpc.php",
+    "/eapi/user/login",
+]
+
+# 已知不支持下载的镜像站点（仅元数据/搜索）
+DOMAIN_BLACKLIST = {"z-lib.id", "z-lib.cx", "z-lib.li", "z-lib.io"}
+
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/125.0.0.0 Safari/537.36"
+)
+
+
+class ZLibraryError(Exception):
+    """Z-Library 操作通用异常。"""
+
+
+class LoginError(ZLibraryError):
+    """登录失败。"""
+
+
+class SearchError(ZLibraryError):
+    """搜索失败。"""
+
+
+class DownloadError(ZLibraryError):
+    """下载失败。"""
+
+
+class QuotaExceededError(ZLibraryError):
+    """今日下载配额已用完。"""
+
+
+def _detect_available_domain(
+    domains: list[str],
+    proxy: Optional[str] = None,
+    timeout: int = 5,
+) -> str:
+    """自动探测可用的域名，返回第一个能成功访问的。"""
+    for domain in domains:
+        url = f"https://{domain}"
+        try:
+            resp = requests.get(
+                url,
+                headers={"User-Agent": USER_AGENT},
+                proxies={"http": proxy, "https": proxy} if proxy else None,
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                logger.info("可用域名: %s", domain)
+                return domain
+        except requests.RequestException:
+            logger.debug("域名不可用: %s", domain)
+            continue
+    raise ZLibraryError(
+        f"所有域名均不可用: {domains}。请检查网络连接或配置代理。"
+    )
 
 
 class Zlibrary:
+    """Z-Library 同步客户端（基于页面抓取）。"""
+
     def __init__(
         self,
         email: str = None,
         password: str = None,
-        remix_userid: [int, str] = None,
-        remix_userkey: str = None,
+        remix_userid: Optional[str] = None,
+        remix_userkey: Optional[str] = None,
+        domain: str = "",
+        proxy: str = "",
+        fallback_domains: list[str] = None,
+        timeout: int = 30,
+        cookies_file: str = "",
     ):
-        self.__email: str
-        self.__name: str
-        self.__kindle_email: str
-        self.__remix_userid: [int, str]
-        self.__remix_userkey: str
-        self.__domain = "1lib.sk"
+        """
+        Args:
+            email: Z-Library 账号邮箱
+            password: Z-Library 密码
+            remix_userid: Remix token 的用户 ID
+            remix_userkey: Remix token 的密钥
+            domain: 指定 API 域名（留空则自动探测）
+            proxy: 代理地址，如 socks5://127.0.0.1:1080
+            fallback_domains: 备用域名列表
+            timeout: HTTP 请求超时（秒）
+            cookies_file: Cookie 文件路径（从 Playwright 浏览器导出），
+                          用于绕过 Cloudflare 验证
+        """
+        self._domain = domain
+        self._proxy = proxy
+        self._fallback_domains = fallback_domains or []
+        self._timeout = timeout
+        self._loggedin = False
+        self._userinfo = {}  # 缓存用户信息
+        self._cookies_file = cookies_file
 
-        self.__loggedin = False
-        self.__headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "accept-language": "en-US,en;q=0.9",
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
-        }
-        self.__cookies = {
-            "siteLanguageV2": "en",
-        }
+        self._session = requests.Session()
+        self._session.headers.update({
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        if proxy:
+            self._session.proxies = {"http": proxy, "https": proxy}
 
-        if email is not None and password is not None:
+        # 从文件加载浏览器 cookies（绕过 Cloudflare）
+        self._load_cookies_file()
+
+        # 自动探测域名
+        if not self._domain:
+            all_domains = self._fallback_domains or DEFAULT_DOMAINS.copy()
+            self._domain = _detect_available_domain(all_domains, proxy, timeout=5)
+
+        logger.info("使用域名: %s", self._domain)
+
+        # 存储凭据供自动重连使用
+        self._email = email or ""
+        self._password = password or ""
+        self._remix_userid = remix_userid or ""
+        self._remix_userkey = remix_userkey or ""
+
+        if email and password:
             self.login(email, password)
-        elif remix_userid is not None and remix_userkey is not None:
-            self.loginWithToken(remix_userid, remix_userkey)
+        elif remix_userid and remix_userkey:
+            self.login_with_token(remix_userid, remix_userkey)
 
-    def __setValues(self, response) -> dict[str, str]:
-        if not response["success"]:
-            return response
-        self.__email = response["user"]["email"]
-        self.__name = response["user"]["name"]
-        self.__kindle_email = response["user"]["kindle_email"]
-        self.__remix_userid = str(response["user"]["id"])
-        self.__remix_userkey = response["user"]["remix_userkey"]
-        self.__cookies["remix_userid"] = self.__remix_userid
-        self.__cookies["remix_userkey"] = self.__remix_userkey
-        self.__loggedin = True
-        return response
+    # ── HTTP 工具 ────────────────────────────────────────────
 
-    def __login(self, email, password) -> dict[str, str]:
-        return self.__setValues(
-            self.__makePostRequest(
-                "/eapi/user/login",
-                data={
-                    "email": email,
-                    "password": password,
-                },
-                override=True,
-            )
+    def _resolve_url(self, path_or_url: str) -> str:
+        """将路径或完整 URL 解析为绝对 URL。"""
+        if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+            return path_or_url
+        return f"https://{self._domain}{path_or_url}"
+
+    def _get(self, path_or_url: str, **kwargs) -> requests.Response:
+        resp = self._session.get(
+            self._resolve_url(path_or_url),
+            timeout=kwargs.pop("timeout", self._timeout),
+            **kwargs,
         )
-
-    def __checkIDandKey(self, remix_userid, remix_userkey) -> dict[str, str]:
-        return self.__setValues(
-            self.__makeGetRequest(
-                "/eapi/user/profile",
-                cookies={
-                    "siteLanguageV2": "en",
-                    "remix_userid": str(remix_userid),
-                    "remix_userkey": remix_userkey,
-                },
+        if self._is_cloudflare_blocked(resp):
+            raise ZLibraryError(
+                "Cloudflare 验证拦截。请运行以下命令导出新 cookies：\n"
+                "  .venv\\Scripts\\python refresh_zlibrary_cookies.py\n"
+                "或者从浏览器手动登录后导出 cookies 到 zlibrary_cookies.json"
             )
-        )
+        return resp
 
-    def login(self, email: str, password: str) -> dict[str, str]:
-        return self.__login(email, password)
-
-    def loginWithToken(
-        self, remix_userid: [int, str], remix_userkey: str
-    ) -> dict[str, str]:
-        return self.__checkIDandKey(remix_userid, remix_userkey)
-
-    def __makePostRequest(
-        self, url: str, data: dict = {}, override=False
-    ) -> dict[str, str]:
-        if not self.isLoggedIn() and override is False:
-            print("Not logged in")
-            return
-
-        return requests.post(
-            "https://" + self.__domain + url,
+    def _post(self, path_or_url: str, data=None, json=None, **kwargs) -> requests.Response:
+        return self._session.post(
+            self._resolve_url(path_or_url),
             data=data,
-            cookies=self.__cookies,
-            headers=self.__headers,
-        ).json()
+            json=json,
+            timeout=kwargs.pop("timeout", self._timeout),
+            **kwargs,
+        )
 
-    def __makeGetRequest(
-        self, url: str, params: dict = {}, cookies=None
-    ) -> dict[str, str]:
-        if not self.isLoggedIn() and cookies is None:
-            print("Not logged in")
-            return
+    # ── Cookie 持久化（绕过 Cloudflare） ─────────────────────
 
-        return requests.get(
-            "https://" + self.__domain + url,
-            params=params,
-            cookies=self.__cookies if cookies is None else cookies,
-            headers=self.__headers,
-        ).json()
+    def _is_cloudflare_blocked(self, resp: requests.Response) -> bool:
+        """检查响应是否被 Cloudflare 拦截。"""
+        if resp.status_code in (503, 513):
+            text_lower = resp.text.lower()
+            if "checking your browser" in text_lower or "diamwall" in text_lower:
+                return True
+        return False
 
-    def getProfile(self) -> dict[str, str]:
-        return self.__makeGetRequest("/eapi/user/profile")
+    def _load_cookies_file(self):
+        """从文件加载浏览器 cookies。"""
+        if not self._cookies_file:
+            return False
+        cookie_path = Path(self._cookies_file)
+        if not cookie_path.exists():
+            logger.warning("Cookie 文件不存在: %s", self._cookies_file)
+            return False
+        try:
+            import json as _json
+            data = _json.loads(cookie_path.read_text(encoding="utf-8"))
+            for item in data:
+                domain = item.get("domain", self._domain)
+                self._session.cookies.set(
+                    item["name"], item["value"],
+                    domain=domain.lstrip("."),
+                )
+            logger.info("已加载 %d 个 cookies（来自 %s）", len(data), self._cookies_file)
+            return True
+        except Exception as e:
+            logger.warning("加载 cookie 文件失败: %s", e)
+            return False
 
-    def getMostPopular(self, switch_language: str = None) -> dict[str, str]:
-        if switch_language is not None:
-            return self.__makeGetRequest(
-                "/eapi/book/most-popular", {"switch-language": switch_language}
+    def save_cookies_file(self, file_path: str = ""):
+        """将当前 session cookies 保存到文件，供后续使用。"""
+        file_path = file_path or self._cookies_file or "zlibrary_cookies.json"
+        cookies_data = [
+            {"name": c.name, "value": c.value, "domain": c.domain}
+            for c in self._session.cookies
+        ]
+        Path(file_path).write_text(
+            __import__("json").dumps(cookies_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info("已保存 %d 个 cookies 到 %s", len(cookies_data), file_path)
+        return file_path
+
+    # ── 登录 ────────────────────────────────────────────────
+
+    def login(self, email: str, password: str) -> dict:
+        """使用邮箱密码登录。
+
+        自动尝试以下方式:
+        1. RPC 登录 (/rpc.php 或 /eapi/user/login)
+        2. 表单登录 (适用于 z-lib.id 等镜像站)
+        """
+        # 先尝试 RPC 登录
+        try:
+            return self._login_via_rpc(email, password)
+        except LoginError:
+            # RPC 失败则尝试表单登录
+            return self._login_via_form(email, password)
+
+    def login_with_token(self, remix_userid: str, remix_userkey: str) -> dict:
+        """使用已获取的 remix token 恢复会话。"""
+        # 设置 cookie 后验证
+        self._session.cookies.set("remix_userid", str(remix_userid), domain=self._domain)
+        self._session.cookies.set("remix_userkey", remix_userkey, domain=self._domain)
+
+        try:
+            profile = self._fetch_profile()
+        except ZLibraryError as e:
+            # Cloudflare 拦截等网络错误
+            raise LoginError(
+                f"无法验证 Token（网络被拦截）: {e}\n"
+                "请运行 refresh_zlibrary_cookies.py 更新浏览器 cookies。"
             )
-        return self.__makeGetRequest("/eapi/book/most-popular")
 
-    def getRecently(self) -> dict[str, str]:
-        return self.__makeGetRequest("/eapi/book/recently")
+        if profile.get("success"):
+            self._loggedin = True
+            self._userinfo = profile.get("user", {})
+            return profile
+        else:
+            error_msg = profile.get("error", "")
+            if "Cloudflare" in error_msg or "拦截" in error_msg:
+                raise LoginError(
+                    f"Token 验证被 Cloudflare 拦截。\n"
+                    "请运行: .venv\\Scripts\\python refresh_zlibrary_cookies.py"
+                )
+            raise LoginError(
+                f"Token 验证失败: {error_msg}\n"
+                "请重新获取 remix token（运行 refresh_zlibrary_cookies.py）"
+            )
 
-    def getUserRecommended(self) -> dict[str, str]:
-        return self.__makeGetRequest("/eapi/user/book/recommended")
+    def _login_via_form(self, email: str, password: str) -> dict:
+        """通过表单登录（适用于 z-lib.id 等使用 CSRF 的镜像站）。"""
+        # 1. GET 登录页提取 CSRF token
+        try:
+            resp = self._get("/login")
+            soup = BeautifulSoup(resp.text, "lxml")
+            form = soup.find("form")
+            if not form:
+                raise LoginError("未找到登录表单")
 
-    def deleteUserBook(self, bookid: [int, str]) -> dict[str, str]:
-        return self.__makeGetRequest(f"/eapi/user/book/{bookid}/delete")
+            token_input = form.find("input", {"name": "_token"}) or form.find("input", {"name": re.compile(r"csrf|token", re.I)})
+            csrf_token = token_input.get("value", "") if token_input else ""
 
-    def unsaveUserBook(self, bookid: [int, str]) -> dict[str, str]:
-        return self.__makeGetRequest(f"/eapi/user/book/{bookid}/unsave")
+            form_action = form.get("action", "/login")
 
-    def getBookForamt(self, bookid: [int, str], hashid: str) -> dict[str, str]:
-        return self.__makeGetRequest(f"/eapi/book/{bookid}/{hashid}/formats")
+            # 2. POST 登录
+            login_data = {
+                "_token": csrf_token,
+                "email": email,
+                "password": password,
+            }
+            login_resp = self._post(form_action, data=login_data, allow_redirects=True)
 
-    def getDonations(self) -> dict[str, str]:
-        return self.__makeGetRequest("/eapi/user/donations")
+            # 3. 验证登录结果
+            success = False
 
-    def getUserDownloaded(
-        self, order: str = None, page: int = None, limit: int = None
-    ) -> dict[str, str]:
-        """
-        order takes one of the values\n
-        ["year",...]
-        """
-        params = {
-            k: v
-            for k, v in {"order": order, "page": page, "limit": limit}.items()
-            if v is not None
+            # 检查 remix cookies（官方域名）
+            for cookie in self._session.cookies:
+                if cookie.name == "remix_userid":
+                    self._userinfo["remix_userid"] = cookie.value
+                    self._userinfo["id"] = cookie.value
+                elif cookie.name == "remix_userkey":
+                    self._userinfo["remix_userkey"] = cookie.value
+
+            if self._userinfo.get("remix_userid") and self._userinfo.get("remix_userkey"):
+                success = True
+
+            # 检查是否已登录（跳离了 /login 页面）
+            if not success:
+                final_url = login_resp.url.rstrip("/")
+                home_url = f"https://{self._domain}"
+                if final_url.startswith(home_url) and "/login" not in final_url:
+                    success = True
+
+            if not success:
+                raise LoginError("表单登录失败（可能账号或密码错误）")
+
+            self._loggedin = True
+
+            # 获取用户信息
+            profile = self._fetch_profile()
+            self._userinfo.update(profile.get("user", {}))
+            return profile
+
+        except LoginError:
+            raise
+        except Exception as e:
+            raise LoginError(f"表单登录异常: {e}")
+
+    def _login_via_rpc(self, email: str, password: str) -> dict:
+        """通过 /rpc.php 登录（当前 Z-Library 主流的登录方式）。"""
+        data = {
+            "isModal": True,
+            "email": email,
+            "password": password,
+            "site_mode": "books",
+            "action": "login",
+            "isSingleLogin": 1,
+            "redirectUrl": "",
+            "gg_json_mode": 1,
         }
-        return self.__makeGetRequest("/eapi/user/book/downloaded", params)
+        # 尝试多个登录端点
+        login_paths = LOGIN_ENDPOINTS
+        if self._domain not in ("1lib.sk",):
+            login_paths = ["/rpc.php"]
 
-    def getExtensions(self) -> dict[str, str]:
-        return self.__makeGetRequest("/eapi/info/extensions")
+        last_error = None
+        for path in login_paths:
+            try:
+                resp = self._post(path, data=data)
+                result = resp.json()
+                if result.get("response", {}).get("validationError"):
+                    last_error = LoginError(
+                        f"登录被拒: {result['response'].get('validationError', '未知错误')}"
+                    )
+                    continue
 
-    def getDomains(self) -> dict[str, str]:
-        return self.__makeGetRequest("/eapi/info/domains")
+                # 从 cookie jar 提取 remix token
+                for cookie in self._session.cookies:
+                    if cookie.name == "remix_userid":
+                        uid = cookie.value
+                    elif cookie.name == "remix_userkey":
+                        ukey = cookie.value
 
-    def getLanguages(self) -> dict[str, str]:
-        return self.__makeGetRequest("/eapi/info/languages")
+                if hasattr(self._session.cookies, "list_domains"):
+                    jar = self._session.cookies
+                else:
+                    jar = {}
 
-    def getPlans(self, switch_language: str = None) -> dict[str, str]:
-        if switch_language is not None:
-            return self.__makeGetRequest(
-                "/eapi/info/plans", {"switch-language": switch_language}
-            )
-        return self.__makeGetRequest("/eapi/info/plans")
+                # 直接解析响应中的 remix token
+                userid = None
+                userkey = None
+                for cookie in self._session.cookies:
+                    if cookie.name == "remix_userid":
+                        userid = cookie.value
+                    elif cookie.name == "remix_userkey":
+                        userkey = cookie.value
 
-    def getUserSaved(
-        self, order: str = None, page: int = None, limit: int = None
-    ) -> dict[str, str]:
-        """
-        order takes one of the values\n
-        ["year",...]
-        """
-        params = {
-            k: v
-            for k, v in {"order": order, "page": page, "limit": limit}.items()
-            if v is not None
-        }
-        return self.__makeGetRequest("/eapi/user/book/saved", params)
+                if userid and userkey:
+                    self._loggedin = True
+                    profile = self._fetch_profile()
+                    self._userinfo = profile.get("user", {})
+                    return profile
+                else:
+                    last_error = LoginError("登录成功但未获取到 remix token")
+                    continue
 
-    def getInfo(self, switch_language: str = None) -> dict[str, str]:
-        if switch_language is not None:
-            return self.__makeGetRequest(
-                "/eapi/info", {"switch-language": switch_language}
-            )
-        return self.__makeGetRequest("/eapi/info")
+            except json.JSONDecodeError:
+                last_error = LoginError(f"登录端点 {path} 返回非 JSON 响应")
+                continue
+            except requests.RequestException as e:
+                last_error = LoginError(f"登录端点 {path} 请求失败: {e}")
+                continue
 
-    def hideBanner(self) -> dict[str, str]:
-        return self.__makeGetRequest("/eapi/user/hide-banner")
+        raise last_error or LoginError("所有登录端点均失败")
 
-    def recoverPassword(self, email: str) -> dict[str, str]:
-        return self.__makePostRequest(
-            "/eapi/user/password-recovery", {"email": email}, override=True
-        )
+    # ── 用户信息 ────────────────────────────────────────────
 
-    def makeRegistration(self, email: str, password: str, name: str) -> dict[str, str]:
-        return self.__makePostRequest(
-            "/eapi/user/registration",
-            {"email": email, "password": password, "name": name},
-            override=True,
-        )
+    def _fetch_profile(self) -> dict:
+        """从网页抓取用户信息。"""
+        try:
+            resp = self._get("/")
 
-    def resendConfirmation(self) -> dict[str, str]:
-        return self.__makePostRequest("/eapi/user/email/confirmation/resend")
+            # 从页面中提取用户信息（登录后页面会包含用户信息）
+            soup = BeautifulSoup(resp.text, "lxml")
 
-    def saveBook(self, bookid: [int, str]) -> dict[str, str]:
-        return self.__makeGetRequest(f"/eapi/user/book/{bookid}/save")
+            # 尝试从多个地方提取用户信息
+            user = {
+                "id": "",
+                "name": "",
+                "email": "",
+                "remix_userid": "",
+                "remix_userkey": "",
+                "downloads_limit": 10,
+                "downloads_today": 0,
+                "kindle_email": "",
+            }
 
-    def sendTo(self, bookid: [int, str], hashid: str, totype: str) -> dict[str, str]:
-        return self.__makeGetRequest(f"/eapi/book/{bookid}/{hashid}/send-to-{totype}")
+            # 从 cookie 获取 token
+            for cookie in self._session.cookies:
+                if cookie.name == "remix_userid":
+                    user["id"] = cookie.value
+                    user["remix_userid"] = cookie.value
+                elif cookie.name == "remix_userkey":
+                    user["remix_userkey"] = cookie.value
 
-    def getBookInfo(
-        self, bookid: [int, str], hashid: str, switch_language: str = None
-    ) -> dict[str, str]:
-        if switch_language is not None:
-            return self.__makeGetRequest(
-                f"/eapi/book/{bookid}/{hashid}", {"switch-language": switch_language}
-            )
-        return self.__makeGetRequest(f"/eapi/book/{bookid}/{hashid}")
+            # 从页面提取用户名
+            name_elem = soup.select_one(".user-name, .profile-name, [class*=user][class*=name]")
+            if name_elem:
+                user["name"] = name_elem.text.strip()
 
-    def getSimilar(self, bookid: [int, str], hashid: str) -> dict[str, str]:
-        return self.__makeGetRequest(f"/eapi/book/{bookid}/{hashid}/similar")
+            # 尝试访问用户信息页面
+            for info_url in ["/users/profile", "/profile", "/user/profile"]:
+                try:
+                    info_resp = self._get(info_url)
+                    if info_resp.status_code == 200:
+                        info_soup = BeautifulSoup(info_resp.text, "lxml")
+                        # 提取邮箱
+                        email_input = info_soup.select_one('input[name="email"], input[type="email"]')
+                        if email_input:
+                            user["email"] = email_input.get("value", "")
+                        break
+                except requests.RequestException:
+                    continue
 
-    def makeTokenSigin(self, name: str, id_token: str) -> dict[str, str]:
-        return self.__makePostRequest(
-            "/eapi/user/token-sign-in",
-            {"name": name, "id_token": id_token},
-            override=True,
-        )
+            return {"success": True, "user": user}
 
-    def updateInfo(
-        self,
-        email: str = None,
-        password: str = None,
-        name: str = None,
-        kindle_email: str = None,
-    ) -> dict[str, str]:
-        return self.__makePostRequest(
-            "/eapi/user/update",
-            {
-                k: v
-                for k, v in {
-                    "email": email,
-                    "password": password,
-                    "name": name,
-                    "kindle_email": kindle_email,
-                }.items()
-                if v is not None
-            },
-        )
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def getProfile(self) -> dict:
+        """获取用户信息。"""
+        if self._userinfo:
+            return {"success": True, "user": self._userinfo}
+        profile = self._fetch_profile()
+        if profile.get("success"):
+            self._userinfo = profile.get("user", {})
+        return profile
+
+    def getDownloadsLeft(self) -> int:
+        """获取今日剩余下载次数。"""
+        try:
+            profile = self.getProfile()
+            if profile.get("success"):
+                user = profile["user"]
+                limit = user.get("downloads_limit", 10)
+                today = user.get("downloads_today", 0)
+                return max(0, limit - today)
+
+            # 备用：从下载页面抓取限额信息
+            resp = self._get("/users/downloads")
+            soup = BeautifulSoup(resp.text, "lxml")
+
+            dcount = soup.select_one(".d-count, .download-count, [class*=download][class*=count]")
+            if dcount:
+                parts = dcount.text.strip().split("/")
+                if len(parts) == 2:
+                    return max(0, int(parts[1]) - int(parts[0]))
+
+            return 10  # 默认值
+        except Exception:
+            return 10
+
+    # ── 搜索 ────────────────────────────────────────────────
 
     def search(
         self,
-        message: str = None,
+        message: str = "",
         yearFrom: int = None,
         yearTo: int = None,
         languages: str = None,
-        extensions: [str] = None,
+        extensions: list[str] = None,
         order: str = None,
         page: int = None,
         limit: int = None,
-    ) -> dict[str, str]:
-        return self.__makePostRequest(
-            "/eapi/book/search",
-            {
-                k: v
-                for k, v in {
-                    "message": message,
-                    "yearFrom": yearFrom,
-                    "yearTo": yearTo,
-                    "languages": languages,
-                    "extensions[]": extensions,
-                    "order": order,
-                    "page": page,
-                    "limit": limit,
-                }.items()
-                if v is not None
-            },
-        )
+    ) -> dict:
+        """搜索图书。
 
-    def __getImageData(self, url: str) -> requests.Response.content:
-        res = requests.get(url, headers=self.__headers)
-        if res.status_code == 200:
-            return res.content
+        Returns:
+            dict: {"books": [...], "total": int, "page": int}
+            每 book 的格式: {"id": str, "hash": str, "title": str, "author": str,
+                            "extension": str, "year": str, "size": str, "cover": str}
+        """
+        if not message:
+            raise SearchError("搜索关键词不能为空")
 
-    def getImage(self, book: dict[str, str]) -> requests.Response.content:
-        return self.__getImageData(book["cover"])
+        # 构造搜索 URL（支持 /s?q= 和 /s/{q} 两种格式）
+        q = quote(message)
+        is_mirror = self._domain in DOMAIN_BLACKLIST
 
-    def __getBookFile(self, bookid: [int, str], hashid: str) -> [(str, bytes), None]:
-        response = self.__makeGetRequest(f"/eapi/book/{bookid}/{hashid}/file")
+        if is_mirror:
+            path = f"/s?q={q}"
+        else:
+            path = f"/s/{q}?"
 
-        # 只使用原始文件名，添加扩展名
-        filename = response["file"]["description"]
-        filename += "." + response["file"]["extension"]
+        if yearFrom:
+            path += f"{'&' if '?' in path else '?'}yearFrom={yearFrom}"
+        if yearTo:
+            path += f"&yearTo={yearTo}"
+        if languages:
+            path += f"&languages%5B%5D={languages}"
+        # 镜像站不支持 URL 级别的扩展名过滤（会导致重定向）
+        if not is_mirror and extensions:
+            for ext in extensions:
+                path += f"&extensions%5B%5D={ext}"
+        if order:
+            path += f"&order={order}"
+        if page:
+            path += f"&page={page}"
 
-        ddl = response["file"]["downloadLink"]
-        headers = self.__headers.copy()
-        headers["authority"] = ddl.split("/")[2]
+        try:
+            resp = self._get(path)
 
-        res = requests.get(ddl, headers=headers)
-        if res.status_code == 200:
-            return filename, res.content
+            # 检测重定向到 /profile（会话可能已过期）
+            if resp.url.rstrip("/").endswith("/profile") or resp.url.rstrip("/").endswith("/login"):
+                logger.warning("搜索请求被重定向到 %s，尝试重新登录", resp.url)
+                if self._email and self._password:
+                    self.login(self._email, self._password)
+                    resp = self._get(path)
+                elif self._remix_userid and self._remix_userkey:
+                    self.login_with_token(self._remix_userid, self._remix_userkey)
+                    resp = self._get(path)
 
-    def downloadBook(self, book: dict[str, str]) -> [(str, bytes), None]:
-        return self.__getBookFile(book["id"], book["hash"])
+            result = self._parse_search_results(resp.text, page or 1)
+
+            # 后置过滤：某些镜像站不支持 URL 层面的格式过滤
+            if extensions and result["books"]:
+                exts_lower = [e.lower().lstrip(".") for e in extensions]
+                result["books"] = [
+                    b for b in result["books"]
+                    if b.get("extension", "").lower().lstrip(".") in exts_lower
+                ]
+
+            return result
+        except requests.RequestException as e:
+            raise SearchError(f"搜索请求失败: {e}")
+
+    def _parse_search_results(self, html: str, current_page: int) -> dict:
+        """解析搜索结果页面 HTML。
+
+        支持两种格式:
+        1. 新版 z-bookcard（z-library.sk 等）
+        2. 经典 div.resItemBox（z-lib.id 等镜像站）
+        """
+        soup = BeautifulSoup(html, "lxml")
+        books = []
+
+        # 策略1: 经典 div.resItemBox 格式（z-lib.id 等镜像站）
+        result_boxes = soup.find_all("div", class_="resItemBox")
+        if result_boxes:
+            for box in result_boxes:
+                book = self._parse_classic_book_card(box)
+                if book:
+                    books.append(book)
+
+        # 策略2: 现代 z-bookcard 标签（官方现代站点）
+        if not books:
+            book_cards = soup.find_all("z-bookcard")
+            for card in book_cards:
+                book = self._parse_webcomponent_book_card(card)
+                if book:
+                    books.append(book)
+
+        # 策略3: 通用选择器兜底
+        if not books:
+            for selector in [
+                '[class*="book"][class*="item"]',
+                ".cardBook",
+                ".result-card",
+                "#searchResultBox > div",
+            ]:
+                items = soup.select(selector)
+                if items:
+                    for item in items:
+                        book = self._parse_generic_book_card(item)
+                        if book:
+                            books.append(book)
+                    break
+
+        # 尝试获取总页数
+        total = len(books)
+        pager = soup.select_one(".pagination, .pager, [class*=pagination]")
+        if pager:
+            for a in pager.find_all("a"):
+                try:
+                    n = int(a.text.strip())
+                    if n > total:
+                        total = max(total, n)
+                except ValueError:
+                    continue
+
+        if not books:
+            logger.info("未解析到搜索结果（页面结构可能不兼容当前域名）")
+
+        return {"books": books, "total": total, "page": current_page}
+
+    # ── 三种书籍卡片解析器 ─────────────────────────────────
+
+    def _parse_classic_book_card(self, div: BeautifulSoup) -> Optional[dict]:
+        """解析经典 div.resItemBox 格式（z-lib.id 镜像站）。"""
+        try:
+            book = {}
+
+            # data-book_id（z-lib.id 风格）
+            book_id = div.get("data-book_id", "")
+            if not book_id:
+                nested = div.select_one("[data-book_id]")
+                if nested:
+                    book_id = nested.get("data-book_id", "")
+            book["id"] = str(book_id) if book_id else ""
+
+            # 标题
+            title_link = div.select_one("h3 a, a[itemprop='name']")
+            if not title_link:
+                title_link = div.find("a", href=re.compile(r"/book/"))
+            if title_link:
+                book["title"] = title_link.text.strip()
+                href = title_link.get("href", "")
+                if href and not href.startswith("http"):
+                    href = f"https://{self._domain}{href}"
+                book["url"] = href
+
+            # 作者
+            author_div = div.select_one(".authors, .book-author")
+            if author_div:
+                author_links = author_div.find_all("a")
+                authors = [a.text.strip() for a in author_links if a.text.strip()]
+                if authors:
+                    book["author"] = ", ".join(authors)
+
+            # 出版社
+            pub_link = div.select_one("a[itemprop='publisher'], [class*=publisher] a")
+            if pub_link:
+                book["publisher"] = pub_link.text.strip()
+
+            # 从 bookDetailsBox 提取属性
+            details_box = div.select_one(".bookDetailsBox")
+            if details_box:
+                for prop in details_box.find_all("div", class_=re.compile(r"bookProperty")):
+                    label_el = prop.select_one(".property_label")
+                    value_el = prop.select_one(".property_value")
+                    if label_el and value_el:
+                        lbl = label_el.text.strip().lower().rstrip(":")
+                        val = value_el.text.strip()
+                        if "year" in lbl:
+                            book["year"] = val
+                        elif "file" in lbl or "format" in lbl or "extension" in lbl:
+                            parts = val.split(",")
+                            book["extension"] = parts[0].strip()
+                            if len(parts) > 1:
+                                book["size"] = parts[1].strip()
+                        elif "language" in lbl:
+                            book["language"] = val
+                        elif "isbn" in lbl:
+                            book["isbn"] = val
+                        elif "rating" in lbl:
+                            book["rating"] = val
+
+            # 封面
+            img = div.select_one("img.cover, img.lazy, .z-book-precover img")
+            if img:
+                book["cover"] = img.get("src") or img.get("data-src", "")
+
+            # 镜像站没有 hash
+            book["hash"] = ""
+
+            if book.get("title"):
+                return book
+            logger.debug("解析经典卡片失败: 无标题")
+            return None
+        except Exception as e:
+            logger.debug("解析经典卡片异常: %s", e)
+            return None
+
+    def _parse_webcomponent_book_card(self, card) -> Optional[dict]:
+        """解析现代 z-bookcard web component 格式。"""
+        try:
+            book = {}
+            book["id"] = str(card.get("id", ""))
+            book["hash"] = card.get("hash", card.get("data-hash", ""))
+            book["termshash"] = card.get("termshash", "")
+            book["download_url"] = card.get("download", "")  # 直接从 z-bookcard 取下载链接
+
+            title_slot = card.select_one('[slot="title"]')
+            book["title"] = title_slot.text.strip() if title_slot else ""
+
+            author_slot = card.select_one('[slot="author"]')
+            book["author"] = author_slot.text.strip() if author_slot else ""
+
+            details_slot = card.select_one('[slot="details"]')
+            if details_slot:
+                parts = details_slot.text.strip().split(",")
+                book["extension"] = parts[0].strip() if parts else ""
+                book["size"] = parts[1].strip() if len(parts) > 1 else ""
+
+            if not book.get("extension"):
+                book["extension"] = card.get("extension", card.get("data-extension", ""))
+
+            book["year"] = card.get("year", card.get("data-year", ""))
+
+            img = card.select_one("img")
+            book["cover"] = img.get("src") or img.get("data-src", "") if img else ""
+
+            book["publisher"] = card.get("publisher", "")
+            book["isbn"] = card.get("isbn", "")
+
+            return book or None
+        except Exception:
+            return None
+
+    def _parse_generic_book_card(self, item) -> Optional[dict]:
+        """通用兜底解析器。"""
+        try:
+            book = {}
+            a = item.find("a") if item.name != "a" else item
+            if a and a.get("href"):
+                book["url"] = f"https://{self._domain}{a['href']}"
+            text = item.get_text(" ", strip=True)
+            if text:
+                book["title"] = text[:200]
+            return book or None
+        except Exception:
+            return None
+
+    # ── 下载 ────────────────────────────────────────────────
+
+    def downloadBook(self, book: dict) -> tuple[Optional[str], Optional[bytes]]:
+        """下载图书。
+
+        Args:
+            book: 包含 id（或 url）的书籍信息字典
+
+        Returns:
+            (filename, content) 或 (None, None)
+
+        注意: z-lib.id 等镜像站不支持文件下载（仅元数据），
+        如需下载请配置代理访问 1lib.sk 等官方域名，或使用 remix token。
+        """
+        book_id = book.get("id")
+        book_url = book.get("url", "")
+        book_download_url = book.get("download_url", "")  # z-bookcard 直接给出的下载路径
+
+        if not book_id and not book_download_url:
+            raise DownloadError("缺少书籍 id 或 download_url")
+
+        try:
+            # 如果搜索时已获得下载路径，直接使用
+            if book_download_url:
+                dl_link = self._resolve_url(book_download_url)
+            else:
+                # 否则进入详情页查找下载链接
+                if book_url:
+                    detail_url = book_url
+                else:
+                    detail_url = f"/book/{book_id}"
+
+                resp = self._get(detail_url)
+                soup = BeautifulSoup(resp.text, "lxml")
+
+                # 寻找下载按钮，按优先级尝试
+                dl_link = None
+
+                # 1) z-bookcard 的 download 属性（新版 SPA 网站）
+                if not dl_link:
+                    card = soup.select_one("z-bookcard")
+                    if card and card.get("download"):
+                        dl_link = card["download"]
+
+                # 2) addDownloadedBook 按钮（标准 Z-Library）
+                if not dl_link:
+                    dl_btn = soup.select_one("a.addDownloadedBook")
+                    if dl_btn:
+                        dl_link = dl_btn.get("href")
+
+                # 3) class 含 download 的链接/按钮
+                if not dl_link:
+                    dl_btn = soup.select_one(
+                        'a[class*=download], button[class*=download]'
+                    )
+                    if dl_btn:
+                        dl_link = dl_btn.get("href")
+
+                # 4) 任何带 download 关键字的链接
+                if not dl_link:
+                    for a in soup.find_all("a", href=re.compile(r"download", re.I)):
+                        dl_link = a.get("href")
+                        break
+
+                # 5) /dl/ 或 /file/ 路径的链接
+                if not dl_link:
+                    for a in soup.find_all("a", href=re.compile(r"/(dl|file|get)/")):
+                        dl_link = a.get("href")
+                        break
+
+                if not dl_link:
+                    raise DownloadError(
+                        "未找到下载链接。"
+                        + ("z-lib.id 等镜像站不支持文件下载。" if self._domain in DOMAIN_BLACKLIST else "")
+                        + "\n提示: 设置代理 (proxy) 访问官方域名后可下载，"
+                        + "或参见 README 获取 remix token 后使用 token 登录。"
+                    )
+
+            # 处理相对链接
+            if dl_link.startswith("/"):
+                dl_link = f"https://{self._domain}{dl_link}"
+
+            # 下载文件
+            file_resp = self._session.get(
+                dl_link,
+                timeout=self._timeout,
+                stream=True,
+            )
+            file_resp.raise_for_status()
+
+            # 检查是否被 Cloudflare 拦截
+            if self._is_cloudflare_blocked(file_resp):
+                raise DownloadError(
+                    "下载链接被 Cloudflare 拦截。请运行 refresh_zlibrary_cookies.py 更新 cookies。"
+                )
+
+            filename = self._extract_filename(file_resp, book)
+            return filename, file_resp.content
+
+        except DownloadError:
+            raise
+        except requests.RequestException as e:
+            raise DownloadError(f"下载请求失败: {e}")
+        except Exception as e:
+            raise DownloadError(f"下载异常: {e}")
+
+    def _extract_filename(self, response: requests.Response, book: dict) -> str:
+        """从响应头或书籍信息中提取文件名。"""
+        # 尝试从 Content-Disposition 获取
+        cd = response.headers.get("Content-Disposition", "")
+        fname_match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)', cd)
+        if fname_match:
+            return requests.utils.unquote(fname_match.group(1))
+
+        # 从 Content-Type 扩展名
+        ext = book.get("extension", "")
+        title = book.get("title", "unknown")
+        if ext and not ext.startswith("."):
+            ext = f".{ext}"
+        return f"{title}{ext}".replace(" ", "_")
+
+    # ── 辅助 ────────────────────────────────────────────────
 
     def isLoggedIn(self) -> bool:
-        return self.__loggedin
+        return self._loggedin
 
-    def sendCode(self, email: str, password: str, name: str) -> dict[str, str]:
-        usr_data = {
-            "email": email,
-            "password": password,
-            "name": name,
-            "rx": 215,
-            "action": "registration",
-            "site_mode": "books",
-            "isSinglelogin": 1,
+    def getDomains(self) -> dict:
+        """返回已知域名列表。"""
+        return {
+            "current": self._domain,
+            "available": self._fallback_domains or DEFAULT_DOMAINS,
         }
-        response = self.__makePostRequest(
-            "/papi/user/verification/send-code", data=usr_data, override=True
-        )
-        if response["success"]:
-            response["msg"] = (
-                "Verification code is sent to mail, use verify_code to complete registration"
-            )
-        return response
 
-    def verifyCode(
-        self, email: str, password: str, name: str, code: str
-    ) -> dict[str, str]:
-        usr_data = {
-            "email": email,
-            "password": password,
-            "name": name,
-            "verifyCode": code,
-            "rx": 215,
-            "action": "registration",
-            "redirectUrl": "",
-            "isModa": True,
-            "gg_json_mode": 1,
-        }
-        return self.__makePostRequest("/rpc.php", data=usr_data, override=True)
+    @property
+    def domain(self) -> str:
+        return self._domain
 
-    def getDownloadsLeft(self) -> int:
-        user_profile: dict = self.getProfile()["user"]
-        return user_profile.get("downloads_limit", 10) - user_profile.get(
-            "downloads_today", 0
-        )
+    @domain.setter
+    def domain(self, value: str):
+        self._domain = value

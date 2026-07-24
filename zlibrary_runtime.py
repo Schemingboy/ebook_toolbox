@@ -4,11 +4,16 @@ from pathlib import Path
 from Zlibrary import Zlibrary
 from env_config import load_zlibrary_env
 
+PROJECT_DIR = Path(__file__).resolve().parent
+DEFAULT_COOKIES_FILE = str(PROJECT_DIR / "zlibrary_cookies.json")
+
 
 @dataclass
 class ZLibraryAuth:
     remix_userid: str = ""
     remix_userkey: str = ""
+    domain: str = ""       # 自定义域名
+    proxy: str = ""        # 代理
 
 
 def load_zlibrary_auth(
@@ -18,20 +23,42 @@ def load_zlibrary_auth(
     env_path = env_path or Path(__file__).resolve().parent / ".env"
     zlibrary_account = load_zlibrary_env(env_path)
 
-    if zlibrary_account.get("email") and zlibrary_account.get("password"):
-        temp_client = client_factory(
-            email=zlibrary_account["email"],
-            password=zlibrary_account["password"],
-        )
-        profile = temp_client.getProfile()["user"]
+    # 优先使用已配置的 Remix Token（无需网络请求）
+    if zlibrary_account.get("remix_userid") and zlibrary_account.get("remix_userkey"):
         return ZLibraryAuth(
-            remix_userid=str(profile["id"]),
-            remix_userkey=profile["remix_userkey"],
+            remix_userid=zlibrary_account["remix_userid"],
+            remix_userkey=zlibrary_account["remix_userkey"],
+            domain=zlibrary_account.get("domain", ""),
+            proxy=zlibrary_account.get("proxy", ""),
         )
+
+    # 无 Token 但有邮箱密码 → 尝试登录提取 Token
+    if zlibrary_account.get("email") and zlibrary_account.get("password"):
+        try:
+            temp_client = client_factory(
+                email=zlibrary_account["email"],
+                password=zlibrary_account["password"],
+                domain=zlibrary_account.get("domain", ""),
+                proxy=zlibrary_account.get("proxy", ""),
+            )
+            profile = temp_client.getProfile()
+            if profile.get("success"):
+                user = profile["user"]
+                return ZLibraryAuth(
+                    remix_userid=str(user["id"]),
+                    remix_userkey=user["remix_userkey"],
+                    domain=zlibrary_account.get("domain", ""),
+                    proxy=zlibrary_account.get("proxy", ""),
+                )
+        except Exception as e:
+            # 登录失败（含 Cloudflare 拦截），返回空的 auth 让下游报错
+            pass
 
     return ZLibraryAuth(
         remix_userid=zlibrary_account.get("remix_userid", ""),
         remix_userkey=zlibrary_account.get("remix_userkey", ""),
+        domain=zlibrary_account.get("domain", ""),
+        proxy=zlibrary_account.get("proxy", ""),
     )
 
 
@@ -42,6 +69,9 @@ def create_zlibrary_client(auth: ZLibraryAuth, client_factory=Zlibrary):
     return client_factory(
         remix_userid=auth.remix_userid,
         remix_userkey=auth.remix_userkey,
+        domain=auth.domain,
+        proxy=auth.proxy,
+        cookies_file=DEFAULT_COOKIES_FILE,
     )
 
 
