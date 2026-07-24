@@ -379,7 +379,7 @@ def ensure_hashes_for_paths(
                     "UPDATE files SET quick_hash = ?, full_hash = COALESCE(?, full_hash) WHERE path = ?",
                     (quick_hash, full_hash if include_full_hash else None, str(path)),
                 )
-            result[path] = (quick_hash, full_hash if include_full_hash else full_hash)
+            result[path] = (quick_hash, full_hash if include_full_hash else None)
         conn.commit()
     return result
 
