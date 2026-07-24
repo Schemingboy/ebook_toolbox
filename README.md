@@ -1,179 +1,142 @@
-# ebook_toolbox 电子书处理工具箱
+# ebook_toolbox
 
-面向个人电子书库整理的脚本集合，覆盖本地书单检索、Z-Library 补全下载、书单页抓取、重复文件报告和若干独立清理工具。
+丢一串书名进去，Z-Library 上有的它就自动给你下回来。
 
-## 快速开始
+核心是**批量下载**：你手上有一串想读的书名（或者一个 Z-Library 书单页面的链接），工具逐本搜、逐本下，处理 Cloudflare 验证、绕开重复、尊重每日配额。不用你一本一本去站上点。
 
-1. 安装依赖：
+顺带也能管本地书库——查重、清理文件名、建索引——但那些是辅助。
 
-   ```bash
-   pip install requests beautifulsoup4 lxml pyperclip selenium docx2txt ebooklib send2trash pywin32 fastapi uvicorn playwright cloudscraper
-   playwright install chromium
-   ```
+## 一键装好
 
-2. 复制项目根目录下的 `.env.example` 为 `.env`，填写 Z-Library 账号信息：
+Windows + PowerShell（本项目的运行环境）：
 
-   ```dotenv
-   ZLIBRARY_EMAIL=your_email@example.com
-   ZLIBRARY_PASSWORD=your_password
-
-   # 或者直接使用 remix token（最推荐方式，不怕密码泄露）
-   ZLIBRARY_REMIX_USERID=
-   ZLIBRARY_REMIX_USERKEY=
-
-   # 自定义域名（留空则自动探测可用域名）
-   ZLIBRARY_DOMAIN=
-
-   # 代理配置（国内用户必备，否则无法从官方域名下载）
-   ZLIBRARY_PROXY=
-   ```
-
-   > **国内用户特别注意**：
-   > - ⚠️ `z-lib.id` 已被确认为**钓鱼站**，不要使用。当前官方域名为 `z-lib.by`
-   > - 所有官方域名都有 **Cloudflare 浏览器验证**，自动化工具无法直接访问
-   > - 首次使用或遇到 Cloudflare 报错时，运行：`.venv\Scripts\python refresh_zlibrary_cookies.py`
-   > - 该脚本会用 Playwright 真实浏览器导出 cookies，绕过 Cloudflare
-   > - Web UI 设置面板中有「测试连接」按钮，可一键验证配置
-
-3. **获取 Remix Token**：
-
-   Remix token 是 Z-Library 的会话凭证。运行以下命令自动获取并写入 `.env`：
-
-   ```bash
-   .venv\Scripts\python refresh_zlibrary_cookies.py
-   ```
-
-   这会：
-   - 启动 Playwright 浏览器（静默模式）
-   - 用 `.env` 中的邮箱密码或已有 token 自动登录
-   - 导出 Cloudflare cookies 到 `zlibrary_cookies.json`
-   - 确保 `ZLIBRARY_REMIX_USERID` 和 `ZLIBRARY_REMIX_USERKEY` 已填入 `.env`
-
-   Token 过期或遇到 Cloudflare 报错时，重新运行上述命令即可。
-
-3. **全新特性：Web 可视化控制台（推荐）**
-
-   现在您可以使用全新的全栈 Web 可视化工具箱管理您的电子书归档与操作。在根目录下运行：
-
-   ```bash
-   python web_server.py
-   ```
-   > 启动后将会自动弹出浏览器界面（地址为 `http://127.0.0.1:8000`）。
-   > 该 UI 提供深色沉浸模式、方便的 Z-Library 账户配置面板、重要脚本的快捷启动卡片（例如本地电子书查阅、书单批量下载，均支持参数输入并带 ? 说明），以及实时的执行日志窗口展示。
-
-   **脚本卡片支持以下选项：**
-   - **不更新索引**：勾选后跳过文件索引的刷新检查，直接使用已有 SQLite 索引，适用于索引已是最新的情况，可节省等待时间。
-   - **从剪贴板读取书单**：勾选后可从浏览器剪贴板直接读取书单内容（需包含《》标记的书名），无需指定书单文件目录。点击「读取剪贴板」按钮获取内容，或执行脚本时自动读取。剪贴板模式仅处理剪贴板内容，不会继续处理本地书单目录。
-
-4. （可选使用命令行）按需手动运行单独的脚本文件，并在命令行覆盖默认路径。
-
-5. 跑测试验证当前改动：
-
-   ```bash
-   python -m unittest discover -s tests
-   ```
-
-## 主要能力
-
-![image-20241126202601631](./assets/image-20241126202601631.png)
-
-### 本地电子书搜索与整理 (collect_local_ebooks.py)
-
-- `collect_local_ebooks.py`：从文本文件或剪贴板提取《书名》清单，搜索本地电子书库并生成 `处理结果.txt` / `处理日志.txt`
-
-- 根据书单内容在本地硬盘上查找指定的电子书文件，并将它们复制到到对应书单目录中。
-  - 支持从剪贴板或文本文件读取书名清单（使用《》标记的书名）
-  - Web UI 中勾选「从剪贴板读取书单」可直接从浏览器剪贴板读取内容，无需指定文件目录
-  - Web UI 中勾选「不更新索引」可跳过索引刷新，直接使用历史索引加速处理
-  - 按文件类型优先级搜索：epub > pdf > txt > mobi > azw3
-  - 使用统一的 SQLite 文件索引 `_file_index.sqlite3`
-- 注意事项：
-  - 首次运行会生成本地硬盘文件索引，耗时较长，请耐心等待
-  - 书名清单需要使用《》标记；使用剪贴板模式时，检测到不含《》的文本会终止运行；
-  - 搜索时会忽略文件名中的标点符号和大小写
-  - 文件名匹配规则：标准化后必须以搜索词开头
-  - 同一本书存在多个版本时，优先选择更高格式优先级、再选更大的文件
-  - 复制前会检查输出目录中是否已经存在相同内容的文件，避免同内容重复拷贝
-
-### Z-Library电子书下载 (download_ebooks_from_zlibrary.py)
-
-自动读取书单目录中的缺失的电子书，从Z-Library自动搜索并批量下载。
-
-- `download_ebooks_from_zlibrary.py`：读取书单目录下的 `处理结果.txt`，对“未找到的文件”，从Z-Library自动搜索并批量下载。
-
-  Z-Library的普通账号每天下载配额是10本书，如果不够用，可以考虑购买VIP账号。
-
-- `download_from_zlibrary_booklist.py`：解析 Z-Library 书单页面并批量下载
-
-  ![image-20241208124257577](./assets/image-20241208124257577.png)
-
-  根据 Z-Library Booklists 中相关书单网址，自动解析书单页面包含的电子书并批量下载。
-
-  - 复制一个或多个 Z-Library 书单页面URL到剪贴板
-  - 通过URL访问书单Web页面，解析其中的电子书信息，并逐个下载电子书
-  - 自动处理登录和电子书搜索匹配
-  - 下载前搜索统一 SQLite 本地索引，先按精确标题命中，再按标准化标题前缀匹配，只下载本地没有的书
-
-### 根据本地书单文件批量下载电子书工具（collect_ebooks_with_booklists.py）
-
-- `collect_ebooks_with_booklists.py`：先本地搜索，再对缺失项调用 Z-Library 下载
-
-整合了上述两个脚本的操作，首先根据本地书单文件在本地硬盘上搜索电子书，然后从Z-Library下载未找到的电子书。
-
-通过 Web UI 执行时，支持以下扩展选项：
-  - **不更新索引**：跳过索引刷新检查，直接使用历史索引
-  - **从剪贴板读取书单**：从剪贴板读取书单内容进行处理，处理完成后直接结束，不会继续执行目录扫描、重试和 Z-Library 下载等后续步骤
-
-
-
-### 重复文件处理
-
-- `find_duplicated_files.py`：建立索引、识别重复文件、导出 Markdown 报告
-- `remove_duplicates_on_report.py`：按报告中的 `- [x]` 项把文件移入回收站
-
-- 重复文件判断规则：
-  - 业务层“同一本书”使用标准化书名加扩展名匹配
-  - 物理层“同一个文件”使用 `size -> quick hash -> full hash` 分层判定
-  - 专门的重复文件检测可以识别“文件名不同但内容相同”的重复文件
-
-### 独立小工具
-
-- `clean_booknames.py`：清理电子书文件名中的 `(Z-Library)`、编号尾缀等冗余信息
-
-- `rename_epub_with_catalog.py`：为 EPUB 合集文件名补充一级目录信息
-
-  这个脚本用于处理EPUB电子书合集的文件名，自动添加合集内容（一级目录）信息。
-
-  - 自动处理文件名中包含"全集"、"套装"、"作品集"等关键词的文件
-  - 读取EPUB文件的一级目录信息，添加到文件名中（格式：原文件名 [目录信息].epub）
-
-  使用示例：
-
-  ```
-  原文件名
-     鲁迅全集(Z-Library).epub
-  处理后的文件名
-     鲁迅全集 [朝花夕拾\_野草\_故事新编\_华盖集].epub
-  如果目录过长，会截断
-     鲁迅全集 [朝花夕拾\_野草...].epub
-  ```
-
-- `pull_md_images_to_local.py`：将 Markdown 中的远程图片下载到本地并改写链接
-
-- `doc2md.py`：将目录中的 `.doc/.docx` 合并为单个 Markdown
-
-## 示例命令
-
-```bash
-python collect_ebooks_with_booklists.py
-python download_ebooks_from_zlibrary.py
-python download_from_zlibrary_booklist.py
-python clean_booknames.py --directory "J:\电子书\2024年"
-python pull_md_images_to_local.py --md-file "D:\notes\article.md"
-python doc2md.py --input-dir "G:\Download\创作"
-python rename_epub_with_catalog.py --target-dir "J:\zlibrary" "K:\ebooks"
+```powershell
+git clone https://github.com/Schemingboy/ebook_toolbox.git; cd ebook_toolbox; python -m venv .venv; .venv\Scripts\pip install -r requirements.txt; .venv\Scripts\python -m playwright install chromium
 ```
 
-## 书单素材
+拉代码，建虚拟环境，装依赖，再装一个 Chromium（Cloudflare 人机验证需要真浏览器跑一遍）。要 Python 3.11+，不用装 Node。
 
-`1000+书单合集_famotime.rar` 本压缩包包含了我多年积攒的1000+书单，不知道读什么时可以按单索书。也可以从这个书单开始构建你的电子书库。
+装完还差一步——把 Z-Library 账号填进去。
+
+## 填账号
+
+把 `.env.example` 复制成 `.env`，填这几样：
+
+```dotenv
+# 推荐用 remix token（浏览器 cookies 里的 remix_userid 和 remix_userkey）
+ZLIBRARY_REMIX_USERID=
+ZLIBRARY_REMIX_USERKEY=
+
+# 或者用邮箱密码，二选一
+ZLIBRARY_EMAIL=
+ZLIBRARY_PASSWORD=
+
+# 留空自动探测可用域名
+ZLIBRARY_DOMAIN=
+
+# 国内必填，填你本地代理的端口
+ZLIBRARY_PROXY=http://127.0.0.1:7897
+```
+
+Remix token 优先。拿法：登录 Z-Library 网页版，打开浏览器开发者工具 → Application → Cookies，找 `remix_userid` 和 `remix_userkey` 两个值。
+
+填好之后跑一次：
+
+```powershell
+.venv\Scripts\python refresh_zlibrary_cookies.py
+```
+
+这一步用 Playwright 打开真浏览器过 Cloudflare 验证，把 cookies 存到 `zlibrary_cookies.json`。之后所有下载请求复用这份 cookies。过期了（通常几天到几周）重跑一次就行。
+
+## 怎么用
+
+### Web 界面
+
+```powershell
+.venv\Scripts\python web_server.py
+```
+
+自动弹浏览器，`http://127.0.0.1:8000`。界面上能配账号、测连接（看实时剩余配额）、选脚本填参数一键跑、看实时日志。
+
+下载有两种喂法：
+
+**喂书名**——把含《书名》的文本复制到剪贴板，界面里选「从剪贴板读取书单」启动。文本里没有《》会中止，这是防呆不是 bug。
+
+**喂链接**——把 Z-Library 书单页的 URL 复制到剪贴板，选对应脚本启动，工具会解析页面里的书目逐本下载。
+
+### 命令行
+
+```powershell
+# 先搜本地，本地没有的从 Z-Library 补
+.venv\Scripts\python collect_ebooks_with_booklists.py
+
+# 直接从 Z-Library 下载（读 处理结果.txt 里「未找到」的书名）
+.venv\Scripts\python download_ebooks_from_zlibrary.py
+
+# 解析 Z-Library 书单页面批量下载（URL 放剪贴板）
+.venv\Scripts\python download_from_zlibrary_booklist.py
+```
+
+所有下载都先查本地索引，已有的跳过，不浪费配额。
+
+## 给 AI Agent
+
+你是 agent 的话，照这个顺序走：
+
+**1. 装环境**——跑上面那条一键安装命令。之后所有 Python 调用**必须用** `.venv\Scripts\python`，系统 `python` 没装依赖会报错。
+
+**2. 填配置**——复制 `.env.example` → `.env`，填 `ZLIBRARY_REMIX_USERID`、`ZLIBRARY_REMIX_USERKEY`、`ZLIBRARY_PROXY`。
+
+**3. 过 Cloudflare**—— `.venv\Scripts\python refresh_zlibrary_cookies.py`。报 503 或 Cloudflare 拦截时重跑这条。
+
+**4. 验证**—— `.venv\Scripts\python -m unittest discover -s tests`，或启动 Web 服务后 `POST /api/settings/test-auth` 确认登录和剩余配额。
+
+**5. Web 服务**—— `.venv\Scripts\python web_server.py` 起在 `127.0.0.1:8000`。脚本执行走 WebSocket `/api/ws/run/{script_id}`，`GET /api/scripts` 拿脚本列表和参数定义。
+
+**别动这些**：
+- `.env`、`zlibrary_cookies.json`、`_file_index.sqlite3` 是本机文件，已 gitignore，别提交
+- `Zlibrary.py` 的公开接口（`search()`、`downloadBook()` 等）下游依赖，别改签名
+- Web 服务仅限本机访问，没有鉴权，不要对外暴露
+
+## 注意事项
+
+**域名**：`z-lib.id` 是钓鱼站，别用。`ZLIBRARY_DOMAIN` 留空会自动按 `z-lib.by → z-library.gy → zh.zlib.li → zh.z-lib.rest` 顺序试。
+
+**配额**：普通账号每天 10 本。Web 界面的「测试连接」显示的剩余数是实时查 API 得到的真实值。配额用完工具会自动停，进度存着，第二天接着跑。
+
+**代理**：国内直连官方域名不通。`.env` 里 `ZLIBRARY_PROXY` 填你本地代理端口，`http://` 或 `socks5://` 都行。
+
+**Cloudflare**：所有官方域名都有浏览器验证，`requests` 直接访问返回 503。必须先跑 `refresh_zlibrary_cookies.py` 导出 cookies。cookies 通常有效几天到几周，过期重跑即可。
+
+**首次索引**：第一次跑本地搜索会全盘扫描建 SQLite 索引，书多的话要等几分钟。之后增量更新，快很多。
+
+**书名要带《》**：书单文本里的书名必须用《》包住，剪贴板模式尤其严格。
+
+## 全部脚本
+
+| 脚本 | 干什么 |
+| --- | --- |
+| `collect_ebooks_with_booklists.py` | 先搜本地，缺的从 Z-Library 补下 |
+| `download_ebooks_from_zlibrary.py` | 读「处理结果」里未找到的书，去 Z-Library 下 |
+| `download_from_zlibrary_booklist.py` | 解析 Z-Library 书单页面，批量下载 |
+| `refresh_zlibrary_cookies.py` | 用真浏览器过 Cloudflare，导出 cookies |
+| `collect_local_ebooks.py` | 在本地书库里按书名搜索、复制、归档 |
+| `find_duplicated_files.py` | 找重复文件，导出 Markdown 报告 |
+| `remove_duplicates_on_report.py` | 按报告删重复（丢回收站，不直接删） |
+| `clean_booknames.py` | 清理文件名里的 `(Z-Library)`、编号尾缀 |
+| `rename_epub_with_catalog.py` | 给 EPUB 合集文件名补上一级目录信息 |
+| `doc2md.py` | 把一个目录里的 .doc/.docx 合并成 Markdown |
+| `pull_md_images_to_local.py` | 把 Markdown 里的远程图片下到本地 |
+| `web_server.py` | 启动 Web 控制台 |
+
+## 测试
+
+```powershell
+.venv\Scripts\python -m unittest discover -s tests
+```
+
+## 来源
+
+在 [famotime/ebook_toolbox](https://github.com/famotime/ebook_toolbox) 基础上改的。加了 Web 控制台、Cloudflare 绕过、真实配额查询、中文文件名乱码修复等。
+
+仅供个人合法用途。请遵守当地版权法和 Z-Library 使用条款。
