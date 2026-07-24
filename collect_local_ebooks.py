@@ -290,6 +290,7 @@ def process_book_list(list_file, search_dir, from_clipboard=False, output_dir=No
 
     # 结果文件保存在新建的书单目录下
     result_file = output_dir / "处理结果.txt"
+    pending_file = output_dir / "待获取书单.txt"
 
     # 读取已有的处理结果
     previously_copied = set()
@@ -378,6 +379,15 @@ def process_book_list(list_file, search_dir, from_clipboard=False, output_dir=No
             for book in stats['not_found']:
                 f.write(f"- 《{book}》\n")
         f.write("\n")
+
+    pending_file.write_text(
+        "".join(f"《{book}》\n" for book in stats["not_found"]),
+        encoding="utf-8",
+    )
+
+    if stats["not_found"]:
+        print(f"未找到 {len(stats['not_found'])} 本，待获取清单已保存到：{pending_file}")
+        print(f"取得电子书后请放入：{search_path}")
 
     print(f"\n处理结果已保存到：{result_file}")
 
@@ -477,9 +487,12 @@ def process_book_list_directory(list_dir, search_dir, output_dir=None):
             # 检查是否已存在同名目录
             elif file_state == "existing_dir":
                 print(f"\n[{i}/{total_files}] 跳过已存在目录的文件: {file_path.name}")
-                # 记录为已处理
-                with progress_file.open('a', encoding='utf-8') as f:
-                    f.write(f"{file_path}\n")
+                # 记录为已处理（含内容哈希，下次内容变了会重新处理）
+                if file_path.exists():
+                    from local_ebooks_workflow import _file_hash
+                    content_hash = _file_hash(file_path)
+                    with progress_file.open('a', encoding='utf-8') as f:
+                        f.write(f"{file_path}:{content_hash}\n")
                 continue
 
             try:
@@ -488,6 +501,11 @@ def process_book_list_directory(list_dir, search_dir, output_dir=None):
                 # 读取文件内容并提取书名
                 with file_path.open('r', encoding='utf-8') as f:
                     content = f.read()
+
+                # 在移动文件前计算内容哈希（用于进度追踪）
+                from local_ebooks_workflow import _file_hash
+                content_hash = _file_hash(file_path)
+
                 book_names = extract_book_names(content)
 
                 # 确定目标目录
@@ -516,9 +534,9 @@ def process_book_list_directory(list_dir, search_dir, output_dir=None):
                 except Exception as e:
                     print(f"移动书单文件失败: {e}")
 
-                # 记录处理成功的文件
+                # 记录处理成功的文件（含内容哈希，下次内容变了会重新处理）
                 with progress_file.open('a', encoding='utf-8') as f:
-                    f.write(f"{file_path}\n")
+                    f.write(f"{file_path}:{content_hash}\n")
 
                 # 增加本次处理计数
                 current_processed += 1

@@ -35,6 +35,8 @@ class ZLibraryConfig(ZLibraryAuth):
             return cls(
                 remix_userid=auth.remix_userid,
                 remix_userkey=auth.remix_userkey,
+                domain=auth.domain,
+                proxy=auth.proxy,
             )
         except Exception as e:
             print(f"读取 .env 账号配置失败: {e}")
