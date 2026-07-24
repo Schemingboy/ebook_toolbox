@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from zlibrary_runtime import (
+    DEFAULT_COOKIES_FILE,
     ZLibraryAuth,
     create_zlibrary_client,
     find_pending_result_files,
@@ -70,7 +71,16 @@ class ZlibraryRuntimeTests(unittest.TestCase):
         )
 
         self.assertIsInstance(client, FakeClient)
-        self.assertEqual(captured_kwargs, {"remix_userid": "123", "remix_userkey": "token", "domain": "", "proxy": ""})
+        self.assertEqual(
+            captured_kwargs,
+            {
+                "remix_userid": "123",
+                "remix_userkey": "token",
+                "domain": "",
+                "proxy": "",
+                "cookies_file": DEFAULT_COOKIES_FILE,
+            },
+        )
 
     def test_find_pending_result_files_filters_processed_entries(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -12,6 +12,24 @@ from env_config import load_zlibrary_env, ENV_FILE
 
 app = FastAPI()
 PROJECT_DIR = Path(__file__).parent
+
+
+def _resolve_python_executable() -> str:
+    """优先使用项目内 .venv 的解释器（依赖装在这里），找不到再回退当前解释器。
+
+    GUI 若用系统 python 启动本服务，sys.executable 会指向缺依赖的系统解释器，
+    导致子进程 import pyperclip 等失败。这里显式探测项目虚拟环境。
+    """
+    if os.name == "nt":
+        candidate = PROJECT_DIR / ".venv" / "Scripts" / "python.exe"
+    else:
+        candidate = PROJECT_DIR / ".venv" / "bin" / "python"
+    if candidate.exists():
+        return str(candidate)
+    return sys.executable
+
+
+PYTHON_EXECUTABLE = _resolve_python_executable()
 COOKIES_FILE = str(PROJECT_DIR / "zlibrary_cookies.json")
 DEFAULT_LIBRARY_DIR = PROJECT_DIR / "library"
 DEFAULT_OUTPUT_DIR = PROJECT_DIR / "output"
@@ -339,7 +357,7 @@ async def run_script_websocket(websocket: WebSocket, script_id: str):
         f.write(script_code)
 
     process = await asyncio.create_subprocess_exec(
-        sys.executable, str(temp_script),
+        PYTHON_EXECUTABLE, str(temp_script),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         cwd=str(Path(__file__).parent)

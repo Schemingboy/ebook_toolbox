@@ -98,7 +98,7 @@ def classify_list_file(file_path: Path | str, processed_files: set[str], existin
                     return "existing_dir"  # 内容一样，跳过
                 else:
                     return "pending"       # 内容不同，处理
-        # 同名目录存在但无进度记录 → 可能是新文件，处理
-        return "pending"
+        # 同名目录已存在但无进度记录 → 视为已处理，跳过并补记进度（幂等恢复）
+        return "existing_dir"
 
     return "pending"

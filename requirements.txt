@@ -1,0 +1,19 @@
+# ebook_toolbox 直接依赖（版本 pin 自 .venv 实测，2026-07-24）
+# 仅列代码直接 import 的顶层第三方包；传递依赖由 pip 自动解析。
+# 安装：python -m pip install -r requirements.txt
+#      playwright 还需下载浏览器：python -m playwright install chromium
+
+# Web 服务
+fastapi==0.139.2
+uvicorn==0.51.0
+pydantic==2.13.4
+
+# 网页抓取 / 解析
+requests==2.34.2
+beautifulsoup4==4.15.0
+lxml==6.1.1
+playwright==1.61.0
+
+# 桌面交互 / 文件操作
+pyperclip==1.11.0
+Send2Trash==2.1.0

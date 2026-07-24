@@ -11,7 +11,7 @@ from zlibrary_booklist_workflow import (
 )
 
 
-FIXTURE_PATH = Path(__file__).resolve().parent.parent / "temp" / "译文经典 Booklist _ Z-Library.html"
+FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "zlibrary-booklist-sample.html"
 
 
 class ZlibraryBooklistWorkflowTests(unittest.TestCase):
