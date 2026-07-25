@@ -10,16 +10,15 @@
 | --- | --- |
 | `collect_local_ebooks.py` | 本地书单整理主入口，支持批量书单与剪贴板监控 |
 | `collect_ebooks_with_booklists.py` | 组合入口，先搜本地再补 Z-Library 下载 |
-| `download_ebooks_from_zlibrary.py` | 针对 `处理结果.txt` 中未找到图书的批量下载入口 |
+| `download_ebooks_from_zlibrary.py` | 针对 `处理结果.txt` 中未找到图书的批量下载入口；含按书名与按 ISBN 两种下载路径 |
 | `download_from_zlibrary_booklist.py` | 解析 Z-Library 书单页面并批量下载 |
 | `find_duplicated_files.py` | 重复文件索引、查找与 Markdown 报告导出入口 |
 | `remove_duplicates_on_report.py` | 根据重复文件 Markdown 报告把选中项移入回收站 |
 | `clean_booknames.py` | 清理电子书文件名中的 Z-Library/数字尾缀等冗余信息 |
 | `pull_md_images_to_local.py` | 下载 Markdown 中的远程图片并改写为本地路径 |
-| `doc2md.py` | 合并目录中的 `.doc/.docx` 为单个 Markdown 文件 |
 | `rename_epub_with_catalog.py` | 为 EPUB 合集文件名补充目录信息 |
 | `web_server.py` | Web UI 启动入口（uvicorn + FastAPI） |
-| `web_api.py` | FastAPI 路由：设置读写、脚本列表、WebSocket 执行流、凭据测试 |
+| `web_api.py` | FastAPI 路由：设置读写、脚本列表、偏好读写（`/api/preferences`）、WebSocket 执行流、凭据测试 |
 | `refresh_zlibrary_cookies.py` | Playwright 浏览器导出 Cloudflare cookies（绕过验证） |
 
 ## 共享模块
@@ -32,6 +31,8 @@
 | `zlibrary_booklist_workflow.py` | 书单 HTML 解析、标准化本地索引命中判断、下载目标路径拼装 |
 | `local_ebooks_workflow.py` | 本地书单输出目录决策、已复制条目解析、批量跳过分类 |
 | `duplicate_finder_workflow.py` | 重复文件保留规则、Markdown 报告渲染与解析 |
+| `book_ranking.py` | 版本优先级引擎：按格式→语言→年份→体积→评分对搜索结果排序选最优（`pick_best`）；偏好读写 `preferences.json` |
+| `isbn_utils.py` | ISBN-10/13 识别（含校验位）、规整、多行批量提取 |
 | `Zlibrary.py` | 同步客户端：以 HTML 页面抓取为主，多域名自动探测、RPC/表单登录、SOCKS5 代理；用户资料与下载配额走 `/eapi/user/profile` JSON 接口（`downloads_today`/`downloads_limit`），配额每次实时刷新不缓存 |
 | `zlibrary_adapter.py` | 基于 `zlibrary` PyPI 包的同步适配器，支持代理链和 Tor/Onion 路由 |
 
@@ -46,6 +47,8 @@
 | `tests/test_duplicate_finder_workflow.py` | 重复文件选择策略、报告渲染与改名同内容文件识别 |
 | `tests/test_small_tool_entrypoints.py` | 小工具 CLI 入口参数与默认路径解析 |
 | `tests/test_web_api.py` | Web API 路径校验 |
+| `tests/test_book_ranking.py` | 版本优先级排序、偏好读写、体积/年份/评分解析 |
+| `tests/test_isbn_utils.py` | ISBN-10/13 校验、规整、多行提取 |
 
 ## 非核心目录
 

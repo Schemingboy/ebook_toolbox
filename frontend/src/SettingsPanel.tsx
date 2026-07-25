@@ -112,10 +112,10 @@ export default function SettingsPanel() {
           <input
             value={settings.zlibrary_domain}
             onChange={e => setSettings(s => ({...s, zlibrary_domain: e.target.value}))}
-            placeholder="留空自动探测。例如: z-lib.id"
+            placeholder="留空自动探测。例如: z-lib.by"
           />
           <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', display: 'block', marginTop: '0.25rem' }}>
-            国内用户可尝试 z-lib.id；留空则依次尝试 1lib.sk → z-lib.id → z-library.sk
+            留空则依次尝试 z-lib.by → z-library.gy → zh.zlib.li → zh.z-lib.rest。注意 z-lib.id 是钓鱼站，请勿使用
           </span>
         </div>
         <div className="form-group">

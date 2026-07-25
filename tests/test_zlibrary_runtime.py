@@ -71,6 +71,9 @@ class ZlibraryRuntimeTests(unittest.TestCase):
         )
 
         self.assertIsInstance(client, FakeClient)
+        # 默认挂上 cookies 自动刷新 hook，撞 Cloudflare 时客户端自己修
+        hook = captured_kwargs.pop("auto_refresh_hook", None)
+        self.assertTrue(callable(hook), "默认应注入 auto_refresh_hook")
         self.assertEqual(
             captured_kwargs,
             {
@@ -81,6 +84,38 @@ class ZlibraryRuntimeTests(unittest.TestCase):
                 "cookies_file": DEFAULT_COOKIES_FILE,
             },
         )
+
+    def test_create_zlibrary_client_can_disable_auto_refresh(self):
+        captured_kwargs = {}
+
+        class FakeClient:
+            def __init__(self, **kwargs):
+                captured_kwargs.update(kwargs)
+
+        create_zlibrary_client(
+            ZLibraryAuth(remix_userid="123", remix_userkey="token"),
+            client_factory=FakeClient,
+            auto_refresh=False,
+        )
+
+        self.assertNotIn("auto_refresh_hook", captured_kwargs)
+
+    def test_create_zlibrary_client_falls_back_when_factory_rejects_hook(self):
+        """老的 client_factory（不接受 auto_refresh_hook）必须仍然可用。"""
+        calls = []
+
+        class LegacyClient:
+            def __init__(self, remix_userid="", remix_userkey="", domain="",
+                         proxy="", cookies_file=""):
+                calls.append(remix_userid)
+
+        client = create_zlibrary_client(
+            ZLibraryAuth(remix_userid="777", remix_userkey="k"),
+            client_factory=LegacyClient,
+        )
+
+        self.assertIsInstance(client, LegacyClient)
+        self.assertEqual(calls, ["777"])
 
     def test_find_pending_result_files_filters_processed_entries(self):
         with tempfile.TemporaryDirectory() as temp_dir:

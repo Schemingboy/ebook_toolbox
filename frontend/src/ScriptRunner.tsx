@@ -9,7 +9,7 @@ interface ParamDef {
   label: string;
   default: string;
   tooltip: string;
-  type?: 'text' | 'checkbox';
+  type?: 'text' | 'checkbox' | 'textarea';
 }
 
 interface ScriptDef {
@@ -165,6 +165,33 @@ export default function ScriptRunner() {
                           {p.label}
                           <span className="tooltip-icon" data-tooltip={p.tooltip} style={{ marginLeft: '0.5rem' }}>?</span>
                         </label>
+                      </div>
+                    );
+                  }
+
+                  if (p.type === 'textarea') {
+                    // 剪贴板模式下禁用手填文本框（执行时自动读剪贴板）
+                    const taDisabled = useClipboard(script.id);
+                    return (
+                      <div key={p.key} className="param-input-group">
+                        <div className="param-header">
+                          <label className="param-label">{p.label}</label>
+                          <span className="tooltip-icon" data-tooltip={p.tooltip}>?</span>
+                        </div>
+                        <textarea
+                          className="clipboard-textarea"
+                          disabled={taDisabled}
+                          value={paramValues[script.id]?.[p.key] || ''}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            localStorage.setItem(`${STORAGE_PREFIX}_${script.id}_${p.key}`, val);
+                            setParamValues(prev => ({
+                              ...prev,
+                              [script.id]: { ...prev[script.id], [p.key]: val }
+                            }));
+                          }}
+                          placeholder={taDisabled ? '剪贴板模式已开启，执行时自动读取剪贴板...' : p.tooltip}
+                        />
                       </div>
                     );
                   }

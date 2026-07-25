@@ -11,6 +11,10 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+# 例外：前端构建产物必须入库——README 承诺新用户不装 Node 即可用 Web 界面，
+# web_api.py 只在 frontend/dist 存在时挂载静态文件，缺了界面就是空白页。
+!frontend/dist/
+!frontend/dist/**
 downloads/
 eggs/
 .eggs/
@@ -178,3 +182,6 @@ temp_run_*.py
 
 # AI agent 私有指令，不进公开仓库
 CLAUDE.md
+
+# 用户本机版本偏好（首次运行自动生成，见 preferences.example.json）
+preferences.json

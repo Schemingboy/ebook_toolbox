@@ -2,7 +2,6 @@ import unittest
 from pathlib import Path
 
 import clean_booknames
-import doc2md
 import pull_md_images_to_local
 import rename_epub_with_catalog
 
@@ -23,11 +22,6 @@ class SmallToolEntrypointTests(unittest.TestCase):
 
         self.assertEqual(args.md_file, Path("D:/notes/article.md"))
         self.assertIsNone(args.image_dir)
-
-    def test_doc2md_resolves_default_output_file_inside_input_directory(self):
-        output_path = doc2md.resolve_output_markdown(Path("D:/docs"), None)
-
-        self.assertEqual(output_path, Path("D:/docs/output.md"))
 
     def test_rename_epub_parser_accepts_multiple_target_directories(self):
         parser = rename_epub_with_catalog.build_parser()

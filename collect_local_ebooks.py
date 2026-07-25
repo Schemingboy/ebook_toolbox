@@ -127,48 +127,79 @@ def _find_same_content_file(source_path: Path, output_dir: Path) -> Path | None:
             return existing_file
     return None
 
+def _clean_book_name(name: str) -> str:
+    """清理单个书名：去 HTML 标签/实体、特殊字符、多余空格。"""
+    html_pattern = r'<[^>]+>'
+    html_entity_pattern = r'&[a-zA-Z]+;'
+    # 注意：fallback 模式下不剥离 . 等字符太狠，这里仅用于《》内内容
+    special_chars = r'[/\*\[\]【】\{\}『』「」\\\|\.\+#@\$%\^&\s]'
+    cleaned = re.sub(html_pattern, '', name)
+    cleaned = re.sub(html_entity_pattern, ' ', cleaned)
+    cleaned = re.sub(special_chars, ' ', cleaned)
+    return ' '.join(cleaned.split())
+
+
+def _extract_from_plain_lines(content: str) -> list[str]:
+    """无《》时的兜底：按行拆，每行再按顿号/逗号/分号拆，过滤明显非书名行。
+
+    过滤规则（宽松，宁可多留不错杀）：
+    - 去空行、纯符号行
+    - 去过长行（>80 字，多半是段落说明而非书名）
+    - 去明显的提示语行（以"书单""目录""以下""共"等开头的元信息，弱过滤）
+    """
+    names: list[str] = []
+    # 常见的行内分隔符：中文顿号、逗号、分号、竖线、制表符
+    splitter = r'[、,，;；|\t]'
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # 去掉行首的列表符号/序号（- * 1. 1、 等）
+        line = re.sub(r'^\s*(?:[-*·•]|\d+[.、)．])\s*', '', line).strip()
+        if not line:
+            continue
+        for part in re.split(splitter, line):
+            candidate = part.strip().strip('《》"“”\'')
+            if not candidate:
+                continue
+            if len(candidate) > 80:  # 过长，多半是说明文字
+                continue
+            # 纯标点/纯符号跳过
+            if not re.search(r'[\w一-鿿]', candidate):
+                continue
+            names.append(candidate)
+    return list(dict.fromkeys(names))
+
+
 def extract_book_names(content: str) -> list[str]:
     """
-    从整个文本内容中提取所有使用《》包裹的书名，并去重
-    会清理书名中的HTML标签、HTML实体字符、特殊字符和多余空格
+    从整个文本内容中提取书名并去重。
+
+    优先提取《》包裹的书名（清理 HTML 标签/实体/特殊字符）；
+    若文本中没有《》，则退回"按行/按标点拆分"的宽松模式，
+    使非程序员用户不必强制加书名号也能使用。
 
     Args:
         content: 输入的文本内容
     Returns:
         list[str]: 提取到的去重后的书名列表
     """
-    if not content or '《' not in content:
+    if not content:
         return []
 
-    # 先提取所有《》中的内容
-    pattern = r'《([^》]+)》'
-    matches = re.findall(pattern, content)
+    # 优先：《》包裹的书名
+    if '《' in content:
+        matches = re.findall(r'《([^》]+)》', content)
+        cleaned_names = []
+        for name in matches:
+            cleaned = _clean_book_name(name)
+            if cleaned:
+                cleaned_names.append(cleaned)
+        if cleaned_names:
+            return list(dict.fromkeys(cleaned_names))
 
-    # 清理HTML标签的正则表达式
-    html_pattern = r'<[^>]+>'
-
-    # 清理HTML实体字符的正则表达式
-    html_entity_pattern = r'&[a-zA-Z]+;'
-
-    # 要清理的特殊字符（可以根据需要添加更多）
-    special_chars = r'[/\*\[\]【】\{\}『』「」\\\|\.\+#@\$%\^&\s]'
-
-    # 清理每个书名中的HTML标签、特殊字符和多余空格
-    cleaned_names = []
-    for name in matches:
-        # 1. 移除HTML标签
-        cleaned = re.sub(html_pattern, '', name)
-        # 2. 移除HTML实体字符（如&nbsp;）
-        cleaned = re.sub(html_entity_pattern, ' ', cleaned)
-        # 3. 移除特殊字符
-        cleaned = re.sub(special_chars, ' ', cleaned)
-        # 4. 清理多余空格并去除首尾空格
-        cleaned = ' '.join(cleaned.split())
-        if cleaned:  # 确保清理后的书名不为空
-            cleaned_names.append(cleaned)
-
-    # 使用字典去重并保持顺序
-    return list(dict.fromkeys(cleaned_names))
+    # 兜底：无《》（或《》内全为空）时按行/标点拆分
+    return _extract_from_plain_lines(content)
 
 def clean_dirname(name: str) -> str:
     """

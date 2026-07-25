@@ -21,6 +21,8 @@ from zlibrary_runtime import (
     find_pending_result_files,
     load_zlibrary_auth,
 )
+from book_ranking import load_preferences, pick_best
+from isbn_utils import is_isbn
 
 @dataclass
 class ZLibraryConfig(ZLibraryAuth):
@@ -94,6 +96,8 @@ class ZLibraryDownloader:
         self.client = create_zlibrary_client(self.config)
         # 初始化时获取剩余下载次数
         self.downloads_left = self.client.getDownloadsLeft()
+        # 版本优先级偏好（格式/语言/年份/体积/评分），供 pick_best 选版本
+        self.preferences = load_preferences()
 
     def read_missing_books(self):
         """读取处理结果文件中未找到的书籍清单"""
@@ -125,12 +129,13 @@ class ZLibraryDownloader:
                 self.stats.failed_books += 1  # 搜索无结果计入失败
                 return None
 
-            # 获取搜索结果中文件名包含书名的图书
-            found_book = None
-            for book in results["books"]:
-                if book_name.lower() in book['title'].lower():
-                    found_book = book
-                    break
+            # 先按标题相关性过滤出候选池，再用版本优先级选最优
+            candidates = [
+                book for book in results["books"]
+                if book_name.lower() in book.get("title", "").lower()
+            ]
+            # 候选池空则退回全部结果兜底（宁可给个近似结果也不空手）
+            found_book = pick_best(candidates or results["books"], self.preferences)
 
             if not found_book:
                 print(f"未找到: 《{book_name}》")
@@ -170,6 +175,56 @@ class ZLibraryDownloader:
             print(f"处理图书时出错: {e}")
             self.stats.failed_books += 1  # 异常情况计入失败
             self.update_result_file(book_name, success=False)
+            return None
+
+    def search_and_download_by_isbn(self, isbn: str):
+        """按 ISBN 搜索并下载。ISBN 唯一，不做标题包含过滤，直接用版本优先级选最优。
+
+        Returns:
+            Path | None: 下载成功返回保存路径，否则 None。
+            配额耗尽时抛 Exception("QUOTA_EXCEEDED")（与书名下载一致，供上层断点）。
+        """
+        try:
+            results = self.client.search(message=isbn)
+            books = results.get("books") if results else None
+            if not books:
+                print(f"ISBN 未命中: {isbn}（请改用书名搜索）")
+                self.stats.failed_books += 1
+                return None
+
+            found_book = pick_best(books, self.preferences)
+            if not found_book:
+                print(f"ISBN 未命中: {isbn}（请改用书名搜索）")
+                self.stats.failed_books += 1
+                return None
+
+            print(f"找到: 《{found_book.get('title', isbn)}》 by {found_book.get('author', '未知作者')} [{found_book.get('extension', '?')}]")
+
+            downloads_left = self.client.getDownloadsLeft()
+            print(f"今日剩余下载次数: {downloads_left}")
+            if downloads_left <= 0:
+                print("今日下载次数已用完")
+                self.stats.failed_books += 1
+                raise Exception("QUOTA_EXCEEDED")
+
+            filename, content = self.client.downloadBook(found_book)
+            if not content:
+                print(f"下载失败: ISBN {isbn}")
+                self.stats.failed_books += 1
+                return None
+
+            file_path = self.config.target_dir / filename
+            with file_path.open('wb') as f:
+                f.write(content)
+            print(f"成功下载到: {file_path}")
+            self.stats.downloaded_books += 1
+            return file_path
+
+        except Exception as e:
+            if str(e) == "QUOTA_EXCEEDED":
+                raise
+            print(f"处理 ISBN {isbn} 时出错: {e}")
+            self.stats.failed_books += 1
             return None
 
     def update_result_file(self, book_name: str, success: bool, filename: str = None):

@@ -114,6 +114,7 @@ class Zlibrary:
         fallback_domains: list[str] = None,
         timeout: int = 30,
         cookies_file: str = "",
+        auto_refresh_hook=None,
     ):
         """
         Args:
@@ -127,6 +128,9 @@ class Zlibrary:
             timeout: HTTP 请求超时（秒）
             cookies_file: Cookie 文件路径（从 Playwright 浏览器导出），
                           用于绕过 Cloudflare 验证
+            auto_refresh_hook: 可选回调。撞到 Cloudflare 拦截时调用它刷新
+                          cookies，然后自动重试一次请求。传 None 则保持旧行为
+                          （直接抛错）。签名: () -> bool，返回是否刷新成功。
         """
         self._domain = domain
         self._proxy = proxy
@@ -135,6 +139,9 @@ class Zlibrary:
         self._loggedin = False
         self._userinfo = {}  # 缓存用户信息
         self._cookies_file = cookies_file
+        self._auto_refresh_hook = auto_refresh_hook
+        # 防重入：刷新过程本身会发请求，若那些请求也触发刷新就会无限递归
+        self._refreshing = False
 
         self._session = requests.Session()
         self._session.headers.update({
@@ -175,18 +182,58 @@ class Zlibrary:
         return f"https://{self._domain}{path_or_url}"
 
     def _get(self, path_or_url: str, **kwargs) -> requests.Response:
+        timeout = kwargs.pop("timeout", self._timeout)
         resp = self._session.get(
-            self._resolve_url(path_or_url),
-            timeout=kwargs.pop("timeout", self._timeout),
-            **kwargs,
+            self._resolve_url(path_or_url), timeout=timeout, **kwargs
         )
-        if self._is_cloudflare_blocked(resp):
-            raise ZLibraryError(
-                "Cloudflare 验证拦截。请运行以下命令导出新 cookies：\n"
-                "  .venv\\Scripts\\python refresh_zlibrary_cookies.py\n"
-                "或者从浏览器手动登录后导出 cookies 到 zlibrary_cookies.json"
+        if not self._is_cloudflare_blocked(resp):
+            return resp
+
+        # 撞到 Cloudflare：尝试自动刷新 cookies 后重试一次。
+        # 只重试一次，且 _refreshing 期间不再触发，避免递归风暴。
+        if self._try_auto_refresh():
+            resp = self._session.get(
+                self._resolve_url(path_or_url), timeout=timeout, **kwargs
             )
-        return resp
+            if not self._is_cloudflare_blocked(resp):
+                return resp
+            raise ZLibraryError(
+                "已自动刷新 cookies，但仍被 Cloudflare 拦截。"
+                "可能 remix token 已失效或代理不通——请在 Web 界面「设置」重新填写账号并测试连接。"
+            )
+
+        raise ZLibraryError(
+            "Cloudflare 验证拦截，且自动刷新 cookies 未成功。"
+            "请在 Web 界面点「刷新 Cookies」，或检查 .env 里的代理配置。"
+        )
+
+    def _try_auto_refresh(self) -> bool:
+        """调用注入的 hook 刷新 cookies 并重载到 session。返回是否刷新成功。"""
+        if not self._auto_refresh_hook or self._refreshing:
+            return False
+        self._refreshing = True
+        try:
+            logger.info("撞到 Cloudflare，正在自动刷新 cookies…")
+            ok = bool(self._auto_refresh_hook())
+            if ok:
+                # 清掉旧 cookie 再载入新的，避免同名 cookie 残留导致仍被拦
+                self._session.cookies.clear()
+                self._load_cookies_file()
+                if self._remix_userid and self._remix_userkey:
+                    self._session.cookies.set(
+                        "remix_userid", str(self._remix_userid), domain=self._domain
+                    )
+                    self._session.cookies.set(
+                        "remix_userkey", self._remix_userkey, domain=self._domain
+                    )
+                self._userinfo = {}  # 配额等缓存作废
+                logger.info("cookies 刷新完成，重试请求")
+            return ok
+        except Exception as exc:  # 刷新失败不掩盖原始的拦截错误
+            logger.warning("自动刷新 cookies 失败: %s", exc)
+            return False
+        finally:
+            self._refreshing = False
 
     def _post(self, path_or_url: str, data=None, json=None, **kwargs) -> requests.Response:
         return self._session.post(

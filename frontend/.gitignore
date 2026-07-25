@@ -8,7 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist 故意入库：见根 .gitignore 说明（开箱即用不要求装 Node）
 dist-ssr
 *.local
 

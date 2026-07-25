@@ -62,17 +62,53 @@ def load_zlibrary_auth(
     )
 
 
-def create_zlibrary_client(auth: ZLibraryAuth, client_factory=Zlibrary):
+def _default_refresh_hook() -> bool:
+    """撞到 Cloudflare 时自动刷新 cookies。
+
+    延迟 import cookie_manager：它依赖 playwright，而部分只读脚本（跑测试、
+    解析本地书单）不该因为缺浏览器就 import 失败。
+    """
+    try:
+        from cookie_manager import refresh_cookies
+    except Exception as exc:
+        print(f"[cookies] 无法加载自动刷新模块: {exc}")
+        return False
+    try:
+        refresh_cookies()
+        return True
+    except Exception as exc:
+        print(f"[cookies] 自动刷新失败: {exc}")
+        return False
+
+
+def create_zlibrary_client(
+    auth: ZLibraryAuth,
+    client_factory=Zlibrary,
+    auto_refresh: bool = True,
+):
+    """创建客户端。auto_refresh=True 时挂上 cookies 自动刷新（默认）。
+
+    所有下游下载脚本走这个工厂，因此自动刷新是一次性继承的——撞到 Cloudflare
+    时客户端自己刷 cookies 重试，不需要用户去终端跑命令。
+    """
     if not auth.remix_userid or not auth.remix_userkey:
         raise ValueError("缺少必要的认证信息：remix_userid 和 remix_userkey")
 
-    return client_factory(
+    kwargs = dict(
         remix_userid=auth.remix_userid,
         remix_userkey=auth.remix_userkey,
         domain=auth.domain,
         proxy=auth.proxy,
         cookies_file=DEFAULT_COOKIES_FILE,
     )
+    if auto_refresh:
+        kwargs["auto_refresh_hook"] = _default_refresh_hook
+    try:
+        return client_factory(**kwargs)
+    except TypeError:
+        # 测试里的假 factory 可能不接受 auto_refresh_hook，降级重试
+        kwargs.pop("auto_refresh_hook", None)
+        return client_factory(**kwargs)
 
 
 def find_pending_result_files(root_dir: Path | str, processed_files: set[str] | list[str] | None = None) -> list[Path]:

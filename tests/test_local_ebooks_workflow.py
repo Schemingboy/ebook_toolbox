@@ -33,6 +33,33 @@ class LocalEbooksWorkflowTests(unittest.TestCase):
             ["三体", "The Pragmatic Programmer", "Clean Code"],
         )
 
+    def test_extract_book_names_fallback_splits_lines_without_brackets(self):
+        # 无《》时按行拆，不再中止
+        content = "三体\n活着\n百年孤独\n"
+        self.assertEqual(
+            collect_local_ebooks.extract_book_names(content),
+            ["三体", "活着", "百年孤独"],
+        )
+
+    def test_extract_book_names_fallback_splits_cjk_punctuation(self):
+        # 无《》时行内再按顿号/逗号/分号拆
+        content = "三体、活着，百年孤独；沙丘"
+        self.assertEqual(
+            collect_local_ebooks.extract_book_names(content),
+            ["三体", "活着", "百年孤独", "沙丘"],
+        )
+
+    def test_extract_book_names_prefers_brackets_when_present(self):
+        # 有《》时只取书名号内容，忽略正文噪声
+        content = "这是我今天想读的书：《三体》，很好看"
+        self.assertEqual(
+            collect_local_ebooks.extract_book_names(content),
+            ["三体"],
+        )
+
+    def test_extract_book_names_empty_returns_empty(self):
+        self.assertEqual(collect_local_ebooks.extract_book_names(""), [])
+
     def test_resolve_output_dir_uses_single_book_bucket_and_multi_book_stem(self):
         base_output_dir = Path("J:/书单")
 
