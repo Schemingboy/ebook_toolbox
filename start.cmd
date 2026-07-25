@@ -1,5 +1,5 @@
 @echo off
-REM ebook_toolbox launcher for Windows -- just double-click this file.
+REM zlibrary-batch-download launcher for Windows -- just double-click this file.
 REM
 REM Kept deliberately ASCII-only: cmd.exe renders non-ASCII bytes using the
 REM console code page, so Chinese text here would show up as garbage on many

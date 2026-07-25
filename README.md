@@ -1,4 +1,4 @@
-# ebook_toolbox
+# zlibrary-batch-download
 
 丢一串书名进去，Z-Library 上有的它就自动给你下回来。
 
@@ -11,8 +11,8 @@
 拉下代码，**双击 `start.cmd`**（macOS / Linux 跑 `./start.sh`），就完事了。
 
 ```powershell
-git clone https://github.com/Schemingboy/ebook_toolbox.git
-cd ebook_toolbox
+git clone https://github.com/Schemingboy/zlibrary-batch-download.git
+cd zlibrary-batch-download
 .\start.cmd
 ```
 

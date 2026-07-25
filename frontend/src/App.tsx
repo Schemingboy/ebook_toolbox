@@ -33,7 +33,7 @@ function App() {
     return (
       <div className="app-container">
         <header className="header">
-          <h1>Ebook Toolbox</h1>
+          <h1>Z-Library 批量下载</h1>
           <p>正在检查运行环境…</p>
         </header>
       </div>
@@ -44,7 +44,7 @@ function App() {
     return (
       <div className="app-container">
         <header className="header">
-          <h1>Ebook Toolbox</h1>
+          <h1>Z-Library 批量下载</h1>
           <p>连不上本地服务。请关掉这个页面，重新双击 start.cmd 启动。</p>
         </header>
       </div>
@@ -55,7 +55,7 @@ function App() {
     return (
       <div className="app-container">
         <header className="header">
-          <h1>Ebook Toolbox</h1>
+          <h1>Z-Library 批量下载</h1>
           <p>第一次使用，先花一分钟连上你的 Z-Library 账号</p>
         </header>
         <SetupWizard onDone={() => setGate('ready')} />
@@ -66,8 +66,8 @@ function App() {
   return (
     <div className="app-container">
       <header className="header">
-        <h1>Ebook Toolbox</h1>
-        <p>您的本地电子书聚合、重命名、批量下载和自动化终极管理中心</p>
+        <h1>Z-Library 批量下载</h1>
+        <p>喂一串书名或 ISBN，自动逐本搜索下载</p>
       </header>
 
       <HealthBar onNeedSetup={() => setGate('setup')} />

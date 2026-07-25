@@ -1,4 +1,4 @@
-# ebook_toolbox launcher for PowerShell.
+# zlibrary-batch-download launcher for PowerShell.
 #
 # ASCII-only on purpose: Windows PowerShell 5.1 reads .ps1 files using the
 # system ANSI code page unless they carry a UTF-8 BOM, so Chinese text here

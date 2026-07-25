@@ -440,7 +440,7 @@ def main() -> int:
     import sys
 
     fix = "--fix" in sys.argv
-    print("ebook_toolbox 环境自检" + ("（含自动修复）" if fix else ""))
+    print("zlibrary-batch-download 环境自检" + ("（含自动修复）" if fix else ""))
     print("-" * 46)
     report = run_checks(fix=fix, emit=print)
     print(format_report(report))

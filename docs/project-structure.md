@@ -2,7 +2,7 @@
 
 ## 概览
 
-`ebook_toolbox` 当前按“启动/自检层 + 入口脚本 + 共享工作流模块 + 测试”组织，主线能力集中在本地书单整理、Z-Library 下载、重复文件查找和若干独立小工具。
+`zlibrary-batch-download` 当前按“启动/自检层 + 入口脚本 + 共享工作流模块 + 测试”组织，主线能力集中在本地书单整理、Z-Library 下载、重复文件查找和若干独立小工具。
 
 用户侧只接触启动器：双击 `start.cmd` 后由 `bootstrap.py` 备好环境、`doctor.py` 自检并自愈、`cookie_manager.py` 保证 Cloudflare cookies 有效，再拉起 Web 控制台。下面三层是这条链路的内部分工。
 

@@ -225,7 +225,7 @@ def run_server(open_browser: bool = True) -> int:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     if not open_browser:
-        env["EBOOK_TOOLBOX_NO_BROWSER"] = "1"
+        env["ZLIBRARY_BATCH_NO_BROWSER"] = "1"
 
     cmd = [str(venv_python()), "-u", str(PROJECT_DIR / "web_server.py")]
     try:
@@ -235,7 +235,7 @@ def run_server(open_browser: bool = True) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="ebook_toolbox 启动器")
+    parser = argparse.ArgumentParser(description="zlibrary-batch-download 启动器")
     parser.add_argument("--check", action="store_true", help="只检查环境，不启动服务")
     parser.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     parser.add_argument("--reinstall", action="store_true", help="强制重装依赖")
@@ -246,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         pass
 
-    _log("ebook_toolbox")
+    _log("zlibrary-batch-download")
     _log("=" * 46)
 
     if not check_python_version():

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ebook_toolbox launcher for macOS / Linux.
+# zlibrary-batch-download launcher for macOS / Linux.
 #
 # ASCII-only on purpose, mirroring start.cmd: all human-facing text lives in
 # bootstrap.py so there is exactly one place to maintain it.
