@@ -1,4 +1,4 @@
-# ebook_toolbox 直接依赖（版本 pin 自 .venv 实测，2026-07-24）
+# zlibrary-batch-download 直接依赖（版本 pin 自 .venv 实测，2026-07-24）
 # 仅列代码直接 import 的顶层第三方包；传递依赖由 pip 自动解析。
 # 安装：python -m pip install -r requirements.txt
 #      playwright 还需下载浏览器：python -m playwright install chromium

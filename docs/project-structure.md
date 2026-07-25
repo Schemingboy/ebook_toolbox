@@ -15,6 +15,33 @@
 | `doctor.py` | 环境自检与自愈：依赖/浏览器/`.env`/凭据/代理/cookies/配额七项；`--fix` 自动修可修项，`preflight()` 供跑任务前调用 |
 | `cookie_manager.py` | Cookies 生命周期：状态查询、自动刷新（headless 失败退回有头）、`/eapi/user/profile` 真实探针校验、邮箱密码换 remix token、写 `.env` |
 
+## HTTP 端点
+
+服务只监听 `127.0.0.1:8000`，**没有任何鉴权**，不要对外暴露。
+
+| 端点 | 作用 |
+| --- | --- |
+| `GET/POST /api/settings` | 读写 `.env` 里的账号、域名、代理 |
+| `POST /api/settings/test-auth` | 测试登录并返回实时剩余配额 |
+| `GET/POST /api/preferences` | 读写 `preferences.json` 版本优先级 |
+| `GET /api/doctor` | 环境自检；带 `?fix=true` 时自动修可修项 |
+| `GET /api/cookies/status` | Cookies 健康度（纯本地判断，不发请求） |
+| `POST /api/cookies/refresh` | 手动刷新 cookies（起子进程跑 playwright） |
+| `POST /api/setup` | 首次配置：邮箱密码 → 换 remix token → 写 `.env` + 导出 cookies |
+| `GET /api/proxy/detect` | 探测本机常见代理端口，供向导预填 |
+| `GET /api/scripts` | 脚本列表与参数定义 |
+| `WS /api/ws/run/{script_id}` | 执行脚本并流式回传日志 |
+
+## 环境变量
+
+账号相关的 `ZLIBRARY_EMAIL` / `ZLIBRARY_PASSWORD` / `ZLIBRARY_REMIX_USERID` / `ZLIBRARY_REMIX_USERKEY` / `ZLIBRARY_DOMAIN` / `ZLIBRARY_FALLBACK_DOMAINS` / `ZLIBRARY_PROXY` 由 `env_config.py` 从 `.env` 读取。另有三个运行期开关不写在 `.env` 里：
+
+| 变量 | 读取处 | 作用 |
+| --- | --- | --- |
+| `ZLIBRARY_BATCH_PORT` | `web_server.py` | Web 服务端口，默认 8000 |
+| `ZLIBRARY_BATCH_NO_BROWSER` | `web_server.py`（由 `bootstrap.py` 设置） | 设为 `1` 时不自动弹浏览器，避免启动器已开过又开一个 |
+| `ZLIBRARY_COOKIES_MAX_AGE_HOURS` | `cookie_manager.py` | Cookies 视为过期的龄阈值，默认 12 |
+
 ## 入口脚本
 
 | 文件 | 作用 |
@@ -29,7 +56,7 @@
 | `pull_md_images_to_local.py` | 下载 Markdown 中的远程图片并改写为本地路径 |
 | `rename_epub_with_catalog.py` | 为 EPUB 合集文件名补充目录信息 |
 | `web_server.py` | Web UI 启动入口（uvicorn + FastAPI） |
-| `web_api.py` | FastAPI 路由：设置读写、脚本列表、偏好读写（`/api/preferences`）、WebSocket 执行流、凭据测试 |
+| `web_api.py` | FastAPI 路由：设置读写、脚本列表、偏好读写（`/api/preferences`）、WebSocket 执行流（跑前自动 preflight 自愈）、凭据测试；自检与配置类端点见下表 |
 | `refresh_zlibrary_cookies.py` | Playwright 浏览器导出 Cloudflare cookies（绕过验证） |
 
 ## 共享模块
