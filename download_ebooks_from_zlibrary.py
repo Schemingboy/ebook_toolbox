@@ -24,6 +24,13 @@ from zlibrary_runtime import (
 from book_ranking import load_preferences, pick_best
 from isbn_utils import is_isbn
 
+# 每本书之间的最小间隔（秒）。Z-Library 服务条款禁止 automated use，我们无法
+# 完全规避这一点，但可以不表现出机器特征：一本书至少要打「搜索 + 查配额 + 下载」
+# 三个请求，不留间隔地连打是最容易触发风控的模式。2 秒对 10 本的日额度只多花
+# 20 秒，代价可忽略。所有批量下载路径（书名 / ISBN）都必须走这个常量。
+DOWNLOAD_INTERVAL_SECONDS = 2
+
+
 @dataclass
 class ZLibraryConfig(ZLibraryAuth):
     target_dir: Path = Path("ebooks")
@@ -276,15 +283,15 @@ class ZLibraryDownloader:
 
             # 搜索并下载
             file_path = self.search_and_download_book(book_name)
-            if not file_path:
-                continue  # failed_books已在search_and_download_book中更新
 
-            print(f"成功下载到: {file_path}")
-            # 只在成功下载时增加下载计数，失败计数在search_and_download_book中处理
-            self.stats.downloaded_books += 1
+            if file_path:
+                print(f"成功下载到: {file_path}")
+                # 只在成功下载时增加下载计数，失败计数在search_and_download_book中处理
+                self.stats.downloaded_books += 1
 
-            # 添加延时避免请求过于频繁
-            time.sleep(2)
+            # 节流放在成功/失败两条路之后：搜索失败同样发过请求，旧代码在失败时
+            # 直接 continue 跳过 sleep，反而是连打最快的情况。
+            time.sleep(DOWNLOAD_INTERVAL_SECONDS)
 
 def main(root_dir: Path | str, progress_file: Path = None):
     """

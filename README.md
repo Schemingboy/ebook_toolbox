@@ -101,6 +101,12 @@ cookies 已刷新：5 个 → zlibrary_cookies.json
 
 **配额**：普通账号每天 10 本。Web 界面的「测试连接」显示的剩余数是实时查 API 得到的真实值。配额用完工具会自动停，进度存着，第二天接着跑。
 
+**额度不够怎么办**：官方给了一条合法的加倍路子——[Z-Library 的 Telegram bot](https://z-lib.by/faq) 有**独立于网站的**每日额度。按官方 FAQ 原文，网站 10 本用完后还能通过 bot 再下 10 本，一天总共 20 本。同一个账号，不违反条款。想要更高上限就捐赠升 Premium。
+
+⚠️ **不要用多账号轮换来凑额度**。Z-Library [服务条款第 15 节 MULTI-ACCOUNT POLICY](https://z-lib.by/tos) 明确规定一人一号、禁止用不同邮箱注册多个账号，违反的后果写的是 **account suspension or termination**（封号）。第 7 节还单独点名禁止绕过额度限制（circumvent... features that enforce limitations on the use of the Services）。同一 IP、同一批 cookies 上交替出现多个账号是最容易被关联识别的模式，真做了很可能几个号一起封。本工具因此**不提供**多账号功能，这是有意的设计决定。
+
+**请求节流**：两条下载路径（书名 / ISBN）每本之间都留 2 秒间隔，常量是 `download_ebooks_from_zlibrary.py` 里的 `DOWNLOAD_INTERVAL_SECONDS`。每本书至少要打 3 个请求（搜索 + 查配额 + 下载），无间隔连打是最扎眼的模式。想调慢些可以改大，不建议改小。
+
 **代理**：国内直连官方域名不通。`.env` 里 `ZLIBRARY_PROXY` 填你本地代理端口，`http://` 或 `socks5://` 都行。
 
 **Cloudflare**：所有官方域名都有浏览器验证，`requests` 直接访问返回 503。工具用 Playwright 真浏览器过验证并复用 cookies——这一步**全自动**：跑任务前自检会刷过期 cookies，中途撞墙也会自动刷新重试一次。默认超过 12 小时视为过期（可用环境变量 `ZLIBRARY_COOKIES_MAX_AGE_HOURS` 调）。想手动刷就点界面上的「刷新 Cookies」，或跑 `.venv\Scripts\python refresh_zlibrary_cookies.py`。

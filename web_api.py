@@ -441,9 +441,14 @@ async def run_script_websocket(websocket: WebSocket, script_id: str):
 
         isbn_repr = repr(isbn_text)
         script_code = preamble + dedent(f"""\
+            import time
             from pathlib import Path
             from isbn_utils import extract_isbns
-            from download_ebooks_from_zlibrary import ZLibraryConfig, ZLibraryDownloader
+            from download_ebooks_from_zlibrary import (
+                DOWNLOAD_INTERVAL_SECONDS,
+                ZLibraryConfig,
+                ZLibraryDownloader,
+            )
 
             output_dir = Path({output_dir})
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -473,6 +478,11 @@ async def run_script_websocket(websocket: WebSocket, script_id: str):
                                 print("今日下载配额已用完，停止。剩余 ISBN 请明天再跑。")
                                 break
                             print(f"处理 ISBN {{isbn}} 出错: {{e}}")
+                        # 与书名下载路径同一节流常量：每本至少 3 个请求
+                        # （搜索 + 查配额 + 下载），无间隔连打是最扎眼的模式。
+                        # 最后一本不用等。
+                        if idx < len(isbns):
+                            time.sleep(DOWNLOAD_INTERVAL_SECONDS)
                     print(f"\\n完成：成功 {{ok}} / {{len(isbns)}} 本")
         """)
 
