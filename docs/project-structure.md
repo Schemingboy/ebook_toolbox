@@ -72,7 +72,7 @@
 | `book_ranking.py` | 版本优先级引擎：按格式→语言→年份→体积→评分对搜索结果排序选最优（`pick_best`）；偏好读写 `preferences.json` |
 | `isbn_utils.py` | ISBN-10/13 识别（含校验位）、规整、多行批量提取 |
 | `cookie_manager.py` | Cookies 生命周期：`cookies_status` 查健康度（纯本地）、`refresh_cookies` 真浏览器过 Cloudflare 并用 `/eapi/user/profile` 探针验证、`ensure_fresh_cookies` 过期才刷、`login_and_capture_token` 邮箱密码换 remix token、`setup_from_credentials` 向导后端 |
-| `Zlibrary.py` | 同步客户端：以 HTML 页面抓取为主，多域名自动探测、RPC/表单登录、SOCKS5 代理；用户资料与下载配额走 `/eapi/user/profile` JSON 接口（`downloads_today`/`downloads_limit`），配额每次实时刷新不缓存 |
+| `Zlibrary.py` | 同步客户端：以 HTML 页面抓取为主，多域名自动探测（复用 session 且把 Cloudflare 503/513 当可达候选，交给自愈链刷 cookies）、RPC/表单登录、SOCKS5 代理；用户资料与下载配额走 `/eapi/user/profile` JSON 接口（`downloads_today`/`downloads_limit`），配额每次实时刷新不缓存 |
 | `zlibrary_adapter.py` | 基于 `zlibrary` PyPI 包的同步适配器，支持代理链和 Tor/Onion 路由 |
 
 ## 测试
@@ -90,6 +90,7 @@
 | `tests/test_isbn_utils.py` | ISBN-10/13 校验、规整、多行提取 |
 | `tests/test_cookie_manager.py` | Cookies 状态判定（缺失/无登录态/超龄）、`ensure_fresh_cookies` 该刷才刷、`write_env` 保留既有行 |
 | `tests/test_doctor.py` | 各项检查的等级判定、过期 cookies 自动修复、代理端口探测、报告 `needs_setup` 语义 |
+| `tests/test_zlibrary_domain_detection.py` | 域名探测走同一 session、Cloudflare 挑战页算候选而非不可用、全部不可达才抛错 |
 
 ## 非核心目录
 

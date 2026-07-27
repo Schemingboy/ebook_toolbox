@@ -107,7 +107,9 @@ cookies 已刷新：5 个 → zlibrary_cookies.json
 
 **请求节流**：两条下载路径（书名 / ISBN）每本之间都留 2 秒间隔，常量是 `download_ebooks_from_zlibrary.py` 里的 `DOWNLOAD_INTERVAL_SECONDS`。每本书至少要打 3 个请求（搜索 + 查配额 + 下载），无间隔连打是最扎眼的模式。想调慢些可以改大，不建议改小。
 
-**代理**：国内直连官方域名不通。`.env` 里 `ZLIBRARY_PROXY` 填你本地代理端口，`http://` 或 `socks5://` 都行。
+**代理**：国内直连官方域名不通。`.env` 里 `ZLIBRARY_PROXY` 填你本地代理端口，`http://` 或 `socks5://` 都行。端口要填你代理软件**实际监听**的那个（Clash Verge 默认 7897，FLClash / 部分客户端默认 7890），不同软件不一样，别照抄别人的配置。
+
+**报「代理连不上」或「所有域名均不可用」**：先确认代理是真的通，而不是只有界面开着。命令行验一次（把端口换成你自己的）：`curl -x http://127.0.0.1:7897 -I https://www.google.com --max-time 10`。拿不到响应头就是代理侧的问题——最常见的是内核没启动，或订阅里没选到活着的节点（TCP 能连上但转发超时就是这种）。代理通了之后再试 `curl -x http://127.0.0.1:7897 -I https://z-lib.by`，这里返回 **503 是正常的**，那是 Cloudflare 验证页，说明网络已经到位、只差 cookies，回界面点「连接并开始使用」就行。
 
 **Cloudflare**：所有官方域名都有浏览器验证，`requests` 直接访问返回 503。工具用 Playwright 真浏览器过验证并复用 cookies——这一步**全自动**：跑任务前自检会刷过期 cookies，中途撞墙也会自动刷新重试一次。默认超过 12 小时视为过期（可用环境变量 `ZLIBRARY_COOKIES_MAX_AGE_HOURS` 调）。想手动刷就点界面上的「刷新 Cookies」，或跑 `.venv\Scripts\python refresh_zlibrary_cookies.py`。
 
