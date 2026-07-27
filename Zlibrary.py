@@ -24,7 +24,7 @@ import json
 import time
 import logging
 from pathlib import Path
-from urllib.parse import urljoin, urlparse, quote
+from urllib.parse import urljoin, urlparse, quote, unquote_to_bytes
 from typing import Optional
 
 import requests
@@ -999,7 +999,7 @@ class Zlibrary:
         cd = response.headers.get("Content-Disposition", "")
         fname_match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)', cd)
         if fname_match:
-            return self._fix_header_mojibake(requests.utils.unquote(fname_match.group(1)))
+            return self._fix_header_mojibake(self._unquote_filename(fname_match.group(1)))
 
         # 从 Content-Type 扩展名
         ext = book.get("extension", "")
@@ -1007,6 +1007,26 @@ class Zlibrary:
         if ext and not ext.startswith("."):
             ext = f".{ext}"
         return f"{title}{ext}".replace(" ", "_")
+
+    @staticmethod
+    def _unquote_filename(raw: str) -> str:
+        """解 percent-encoding，按编码逐个严格尝试而不是一律当 UTF-8。
+
+        不能用 requests.utils.unquote：它默认 errors="replace"，遇到非 UTF-8 的
+        percent-encoding（实测有服务器发 latin-1 编的 `H%E1bitos_At%F3micos.epub`）
+        会把字符替换成 U+FFFD——那是**不可逆**丢失，后面的 _fix_header_mojibake
+        也救不回来（latin-1 编不了 U+FFFD，直接抛异常原样返回坏名字）。
+        严格解码可以让不合法的编码落到下一个候选，中文名走 UTF-8 不受影响。
+        """
+        if "%" not in raw:
+            return raw
+        quoted = unquote_to_bytes(raw)
+        for encoding in ("utf-8", "cp1252", "latin-1"):
+            try:
+                return quoted.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return raw
 
     @staticmethod
     def _fix_header_mojibake(name: str) -> str:

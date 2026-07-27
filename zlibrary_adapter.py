@@ -287,7 +287,8 @@ class ZlibraryAdapter:
                         import re
                         m = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)', cd)
                         if m:
-                            fname = requests.utils.unquote(m.group(1))
+                            from Zlibrary import Zlibrary as _Z
+                            fname = _Z._unquote_filename(m.group(1))
                         return fname, content
 
             import requests as req_lib
