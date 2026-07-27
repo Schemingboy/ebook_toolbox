@@ -74,27 +74,53 @@ class QuotaExceededError(ZLibraryError):
     """今日下载配额已用完。"""
 
 
+CLOUDFLARE_STATUS_CODES = (503, 513)
+
+
 def _detect_available_domain(
     domains: list[str],
     proxy: Optional[str] = None,
     timeout: int = 5,
+    session: Optional[requests.Session] = None,
 ) -> str:
-    """自动探测可用的域名，返回第一个能成功访问的。"""
+    """自动探测可用的域名，返回第一个能访问的。
+
+    Cloudflare 挑战页（503/513）算「可达，待刷 cookies」而非不可用：探测发生在
+    __init__ 里，比自愈链（_try_auto_refresh）更早，若在这里判死就会直接抛
+    「所有域名均不可用」，刷新 cookies 的机会都没有。只有全部域名都拿不到
+    响应时才算真的网络/代理问题。
+    """
+    if session is not None:
+        get = session.get
+        kwargs = {"timeout": timeout}
+    else:
+        get = requests.get
+        kwargs = {
+            "timeout": timeout,
+            "headers": {"User-Agent": USER_AGENT},
+            "proxies": {"http": proxy, "https": proxy} if proxy else None,
+        }
+
+    challenged: list[str] = []
     for domain in domains:
-        url = f"https://{domain}"
         try:
-            resp = requests.get(
-                url,
-                headers={"User-Agent": USER_AGENT},
-                proxies={"http": proxy, "https": proxy} if proxy else None,
-                timeout=timeout,
-            )
-            if resp.status_code == 200:
-                logger.info("可用域名: %s", domain)
-                return domain
-        except requests.RequestException:
-            logger.debug("域名不可用: %s", domain)
+            resp = get(f"https://{domain}", **kwargs)
+        except requests.RequestException as exc:
+            logger.debug("域名不可达: %s (%s)", domain, exc)
             continue
+        if resp.status_code == 200:
+            logger.info("可用域名: %s", domain)
+            return domain
+        if resp.status_code in CLOUDFLARE_STATUS_CODES:
+            logger.info("域名可达但撞 Cloudflare 验证，列为候选: %s", domain)
+            challenged.append(domain)
+        else:
+            logger.debug("域名返回 HTTP %s: %s", resp.status_code, domain)
+
+    if challenged:
+        logger.info("选用候选域名 %s，稍后刷新 cookies 过 Cloudflare", challenged[0])
+        return challenged[0]
+
     raise ZLibraryError(
         f"所有域名均不可用: {domains}。请检查网络连接或配置代理。"
     )
@@ -158,7 +184,9 @@ class Zlibrary:
         # 自动探测域名
         if not self._domain:
             all_domains = self._fallback_domains or DEFAULT_DOMAINS.copy()
-            self._domain = _detect_available_domain(all_domains, proxy, timeout=5)
+            self._domain = _detect_available_domain(
+                all_domains, proxy, timeout=5, session=self._session
+            )
 
         logger.info("使用域名: %s", self._domain)
 
@@ -248,7 +276,7 @@ class Zlibrary:
 
     def _is_cloudflare_blocked(self, resp: requests.Response) -> bool:
         """检查响应是否被 Cloudflare 拦截。"""
-        if resp.status_code in (503, 513):
+        if resp.status_code in CLOUDFLARE_STATUS_CODES:
             text_lower = resp.text.lower()
             if "checking your browser" in text_lower or "diamwall" in text_lower:
                 return True
