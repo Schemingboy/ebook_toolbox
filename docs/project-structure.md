@@ -91,6 +91,7 @@
 | `tests/test_cookie_manager.py` | Cookies 状态判定（缺失/无登录态/超龄）、`ensure_fresh_cookies` 该刷才刷、`write_env` 保留既有行 |
 | `tests/test_doctor.py` | 各项检查的等级判定、过期 cookies 自动修复、代理端口探测、报告 `needs_setup` 语义 |
 | `tests/test_zlibrary_domain_detection.py` | 域名探测走同一 session、Cloudflare 挑战页算候选而非不可用、全部不可达才抛错 |
+| `tests/test_filename_encoding.py` | 文件名 percent-encoding 按编码严格尝试（中文走 UTF-8、latin-1 编码能救回）、任何输入都不产出 U+FFFD、旧 mojibake 路径不回归 |
 
 ## 非核心目录
 
